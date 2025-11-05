@@ -1,14 +1,25 @@
-# Hi there 👋, I'm Jaylord Casin
+# 🚧 Under Maintenance  
+![status](https://img.shields.io/badge/status-updating-yellow?style=for-the-badge)
+![progress](https://img.shields.io/badge/progress-70%25-blue?style=for-the-badge)
+![last-update](https://img.shields.io/badge/last_update-November_2025-lightgrey?style=for-the-badge)
 
-I'm a passionate software developer who loves open-source, clean code, and building cool projects!
+Hi there 👋  
+Thanks for checking out my profile!
 
-### 💡 About Me
-- 🔭 I’m currently working on open-source Node.js tools
-- 🌱 I’m learning Rust and AI development
-- 💬 Ask me about JavaScript, TypeScript, or React
-- ⚡ Fun fact: I automate everything I can 😎
+I’m currently giving my GitHub a little renovation 🛠️  
+Most of my projects aren’t uploaded yet — just short on time lately 😅  
+But stay tuned, more repositories and code drops are on the way!
 
-### 📫 Connect with me
-- [Twitter](https://twitter.com/yourhandle)
-- [LinkedIn](https://linkedin.com/in/yourhandle)
-- [Portfolio](https://yourwebsite.com)
+---
+
+### 🚀 Coming Soon
+- Fresh open-source projects  
+- Personal experiments and side builds  
+- Cleaner documentation  
+
+---
+
+📢 *Follow me to get updates when everything goes live!*  
+
+💬 *Appreciate your patience 💖*
+
