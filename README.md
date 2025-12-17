@@ -1,7 +1,7 @@
 # 🚧 Under Maintenance  
 ![status](https://img.shields.io/badge/status-updating-yellow?style=for-the-badge)
 ![progress](https://img.shields.io/badge/progress-70%25-blue?style=for-the-badge)
-![last-update](https://img.shields.io/badge/last_update-November_2025-lightgrey?style=for-the-badge)
+![last-update](https://img.shields.io/badge/last_update-December_2025-lightgrey?style=for-the-badge)
 
 Hi there 👋  
 Thanks for checking out my profile!
