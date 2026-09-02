@@ -374,7 +374,7 @@ erDiagram
 | Entity | Purpose | Key notes |
 |---|---|---|
 | `DocumentTemplate` | Versioned, HR-approved template per document type. | `field_schema` defines required/optional fields the template expects; `status`: `DRAFT`/`APPROVED`/`ARCHIVED` (template lifecycle, distinct from but analogous to document lifecycle). |
-| `HRDocument` | A generated or manually created HR document instance. | `status` follows `DRAFT → FOR_REVIEW → APPROVED → FINALIZED → ARCHIVED` (see `architecture.md` §8). `ai_request_log_id` is nullable — manually created documents have none. |
+| `HRDocument` | A generated or manually created HR document instance. | `status` follows `DRAFT → FOR_REVIEW → APPROVED → FINALIZED → ARCHIVED` (see `architecture.md` §9). `ai_request_log_id` is nullable — manually created documents have none. |
 | `DocumentDraftHistory` | Full history of edits/transitions for a given `HRDocument`. | Append-only; `content_snapshot` stores a full copy of content at that point (simpler than diffing, per `ai-architecture.md` §4.4 assumption). |
 
 ### 3.6 AI Platform & Audit
