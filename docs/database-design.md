@@ -1,32 +1,71 @@
-# Core HR (Group 4) — Database Design
+# Core HR (Group 4) — Database Design (Laravel Migrations + Eloquent)
 
-Logical data model for the Core HR subsystem: entities, attributes (representative,
-not exhaustive DDL), and relationships. This is a **logical** model to guide
-implementation; exact column types, indexes, and normalization trade-offs are left to
-the implementation phase.
+Logical and Laravel-concrete data model for the Core HR subsystem: migrations,
+Eloquent models, relationships, and MySQL-specific notes. Per the task brief, the
+schema must be **reproducible entirely through Laravel migrations, Eloquent models,
+factories, and seeders** — no schema object is to be created by hand through
+phpMyAdmin.
 
 **Related documents:**
 [`requirements.md`](./requirements.md) ·
 [`architecture.md`](./architecture.md) ·
 [`ai-architecture.md`](./ai-architecture.md) ·
+[`api-contract.md`](./api-contract.md) ·
 [`integration-contract.md`](./integration-contract.md)
+
+**Status:** Design only — no migrations, models, factories, or seeders have been
+created as part of this analysis phase (per the task instruction not to modify
+application code yet). Table/column names below use Laravel's standard `snake_case`
+convention so they can be implemented as-is.
 
 ---
 
-## 1. Entity Overview
+## 1. Migration Plan Overview
 
-Entities are grouped by the modules defined in `requirements.md` §9:
+Proposed migration order (respecting foreign key dependencies), one migration file
+per table, following Laravel's default `database/migrations/` naming convention
+(`yyyy_mm_dd_hhmmss_create_<table>_table.php`):
 
-- **Employee Master & Org** — `Employee`, `ContactInfo`, `EmergencyContact`,
-  `EmploymentInfo`, `Department`, `Position`, `Branch`
-- **Employment Lifecycle** — `EmploymentHistory`, `EmployeeTransfer`,
-  `EmployeePromotion`, `SeparationRecord` (resignation/termination)
-- **Employee Documents (non-AI)** — `EmployeeDocument`
-- **Self-Service** — `SelfServiceUpdateRequest`
-- **AI Profiling** — `EmployeeProfile`
-- **HR Document Drafting** — `DocumentTemplate`, `HRDocument`, `DocumentDraftHistory`
-- **AI Platform** — `AIRequestLog`
-- **Security & Audit** — `User`, `Role`, `Permission`, `RolePermission`, `HRAuditLog`
+| # | Table | Depends on |
+|---|---|---|
+| 1 | `users` | — |
+| 2 | `roles` | — |
+| 3 | `permissions` | — |
+| 4 | `role_permission` (pivot) | `roles`, `permissions` |
+| 5 | `role_user` (pivot) | `roles`, `users` |
+| 6 | `branches` | — |
+| 7 | `departments` | `branches`, `departments` (self, `parent_department_id`) |
+| 8 | `positions` | `departments` |
+| 9 | `employees` | `positions`, `departments`, `branches`, `employees` (self, `manager_employee_id`) |
+| 10 | `contact_infos` | `employees` |
+| 11 | `emergency_contacts` | `employees` |
+| 12 | `employment_infos` | `employees`, `departments`, `positions`, `branches`, `users` |
+| 13 | `employment_histories` | `employees`, `users` |
+| 14 | `employee_transfers` | `employees`, `departments`, `branches`, `users` |
+| 15 | `employee_promotions` | `employees`, `positions`, `users` |
+| 16 | `separation_records` | `employees`, `users` |
+| 17 | `employee_documents` | `employees`, `users` |
+| 18 | `self_service_update_requests` | `employees`, `users` |
+| 19 | `document_templates` | `users` |
+| 20 | `prompt_templates` | `users` |
+| 21 | `hr_documents` | `employees`, `document_templates`, `users` |
+| 22 | `document_draft_history` | `hr_documents`, `users` |
+| 23 | `ai_request_logs` | `employees`, `users`, `prompt_templates` |
+| 24 | `employee_profiles` | `employees`, `ai_request_logs`, `users` |
+| 25 | `hr_audit_logs` | `users`, `employees`, `hr_documents`, `employee_profiles`, `ai_request_logs` |
+
+Each table also gets Laravel's default `id()` (unsigned big integer primary key),
+`timestamps()` (`created_at`/`updated_at`), and, where noted, `softDeletes()`
+(`deleted_at`) for tables where soft-delete is preferable to hard delete (org
+structure tables, so historical foreign keys remain valid).
+
+`ASSUMPTION`: Primary keys are assumed to be Laravel's default auto-incrementing
+`bigInteger` (`$table->id()`), not UUIDs. If cross-group integration requires
+non-guessable or globally-unique identifiers exposed externally, a `uuid` column
+(indexed, unique) can be added alongside the internal auto-increment PK without
+changing this design — the public `integration-contract.md` API would expose the UUID,
+internal joins would still use the integer PK. This is called out because it is a
+common point of disagreement between teams and should be confirmed early.
 
 ---
 
@@ -34,67 +73,69 @@ Entities are grouped by the modules defined in `requirements.md` §9:
 
 ```mermaid
 erDiagram
-    EMPLOYEE ||--o| CONTACT_INFO : has
-    EMPLOYEE ||--o{ EMERGENCY_CONTACT : has
-    EMPLOYEE ||--|| EMPLOYMENT_INFO : has
-    EMPLOYEE ||--o{ EMPLOYMENT_HISTORY : "generates events"
-    EMPLOYEE ||--o{ EMPLOYEE_TRANSFER : "subject of"
-    EMPLOYEE ||--o{ EMPLOYEE_PROMOTION : "subject of"
-    EMPLOYEE ||--o| SEPARATION_RECORD : "may have"
-    EMPLOYEE ||--o{ EMPLOYEE_DOCUMENT : owns
-    EMPLOYEE ||--o{ SELF_SERVICE_UPDATE_REQUEST : submits
-    EMPLOYEE ||--o{ EMPLOYEE_PROFILE : "profiled as"
-    EMPLOYEE ||--o{ HR_DOCUMENT : "subject of"
-    EMPLOYEE }o--|| DEPARTMENT : "belongs to (current)"
-    EMPLOYEE }o--|| POSITION : "holds (current)"
-    EMPLOYEE }o--|| BRANCH : "assigned to (current)"
-    EMPLOYEE }o--o| EMPLOYEE : "reports to (manager)"
+    EMPLOYEES ||--o| CONTACT_INFOS : has
+    EMPLOYEES ||--o{ EMERGENCY_CONTACTS : has
+    EMPLOYEES ||--|| EMPLOYMENT_INFOS : has
+    EMPLOYEES ||--o{ EMPLOYMENT_HISTORIES : "generates events"
+    EMPLOYEES ||--o{ EMPLOYEE_TRANSFERS : "subject of"
+    EMPLOYEES ||--o{ EMPLOYEE_PROMOTIONS : "subject of"
+    EMPLOYEES ||--o| SEPARATION_RECORDS : "may have"
+    EMPLOYEES ||--o{ EMPLOYEE_DOCUMENTS : owns
+    EMPLOYEES ||--o{ SELF_SERVICE_UPDATE_REQUESTS : submits
+    EMPLOYEES ||--o{ EMPLOYEE_PROFILES : "profiled as"
+    EMPLOYEES ||--o{ HR_DOCUMENTS : "subject of"
+    EMPLOYEES }o--|| DEPARTMENTS : "belongs to (current)"
+    EMPLOYEES }o--|| POSITIONS : "holds (current)"
+    EMPLOYEES }o--|| BRANCHES : "assigned to (current)"
+    EMPLOYEES }o--o| EMPLOYEES : "reports to (manager)"
 
-    DEPARTMENT ||--o{ POSITION : contains
-    DEPARTMENT }o--o| DEPARTMENT : "parent department"
-    BRANCH ||--o{ DEPARTMENT : hosts
+    DEPARTMENTS ||--o{ POSITIONS : contains
+    DEPARTMENTS }o--o| DEPARTMENTS : "parent department"
+    BRANCHES ||--o{ DEPARTMENTS : hosts
 
-    EMPLOYMENT_INFO }o--|| DEPARTMENT : references
-    EMPLOYMENT_INFO }o--|| POSITION : references
-    EMPLOYMENT_INFO }o--|| BRANCH : references
+    EMPLOYMENT_INFOS }o--|| DEPARTMENTS : references
+    EMPLOYMENT_INFOS }o--|| POSITIONS : references
+    EMPLOYMENT_INFOS }o--|| BRANCHES : references
 
-    EMPLOYEE_TRANSFER }o--|| DEPARTMENT : "from/to"
-    EMPLOYEE_TRANSFER }o--|| BRANCH : "from/to"
-    EMPLOYEE_PROMOTION }o--|| POSITION : "from/to"
+    EMPLOYEE_TRANSFERS }o--|| DEPARTMENTS : "from/to"
+    EMPLOYEE_TRANSFERS }o--|| BRANCHES : "from/to"
+    EMPLOYEE_PROMOTIONS }o--|| POSITIONS : "from/to"
 
-    DOCUMENT_TEMPLATE ||--o{ HR_DOCUMENT : "generated from"
-    HR_DOCUMENT ||--o{ DOCUMENT_DRAFT_HISTORY : "has history of"
-    HR_DOCUMENT ||--o| AI_REQUEST_LOG : "generated via (optional)"
-    EMPLOYEE_PROFILE ||--o| AI_REQUEST_LOG : "generated via (optional)"
+    DOCUMENT_TEMPLATES ||--o{ HR_DOCUMENTS : "generated from"
+    HR_DOCUMENTS ||--o{ DOCUMENT_DRAFT_HISTORY : "has history of"
+    HR_DOCUMENTS ||--o| AI_REQUEST_LOGS : "generated via (optional)"
+    EMPLOYEE_PROFILES ||--o| AI_REQUEST_LOGS : "generated via (optional)"
+    PROMPT_TEMPLATES ||--o{ AI_REQUEST_LOGS : "used by"
 
-    USER ||--o{ EMPLOYEE : "may be linked to (ESS login)"
-    USER }o--o{ ROLE : "assigned"
-    ROLE }o--o{ PERMISSION : grants
-    USER ||--o{ HR_AUDIT_LOG : performs
-    USER ||--o{ AI_REQUEST_LOG : initiates
+    USERS ||--o{ EMPLOYEES : "may be linked to (ESS login)"
+    USERS }o--o{ ROLES : "assigned via role_user"
+    ROLES }o--o{ PERMISSIONS : "granted via role_permission"
+    USERS ||--o{ HR_AUDIT_LOGS : performs
+    USERS ||--o{ AI_REQUEST_LOGS : initiates
 
-    EMPLOYEE ||--o{ HR_AUDIT_LOG : "affected by"
+    EMPLOYEES ||--o{ HR_AUDIT_LOGS : "affected by"
 
-    EMPLOYEE {
-        uuid employee_id PK
+    EMPLOYEES {
+        bigint id PK
         string first_name
         string last_name
         date date_of_birth
         string gender
         string civil_status
         string nationality
-        uuid current_position_id FK
-        uuid current_department_id FK
-        uuid current_branch_id FK
-        uuid manager_employee_id FK
+        bigint position_id FK
+        bigint department_id FK
+        bigint branch_id FK
+        bigint manager_employee_id FK
         string employment_status
-        datetime created_at
-        datetime updated_at
+        timestamp created_at
+        timestamp updated_at
+        timestamp deleted_at
     }
 
-    CONTACT_INFO {
-        uuid contact_info_id PK
-        uuid employee_id FK
+    CONTACT_INFOS {
+        bigint id PK
+        bigint employee_id FK
         string mobile_number
         string personal_email
         string work_email
@@ -102,351 +143,420 @@ erDiagram
         string permanent_address
     }
 
-    EMERGENCY_CONTACT {
-        uuid emergency_contact_id PK
-        uuid employee_id FK
+    EMERGENCY_CONTACTS {
+        bigint id PK
+        bigint employee_id FK
         string full_name
         string relationship
         string phone_number
         string address
     }
 
-    EMPLOYMENT_INFO {
-        uuid employment_info_id PK
-        uuid employee_id FK
+    EMPLOYMENT_INFOS {
+        bigint id PK
+        bigint employee_id FK
         date hire_date
         string employment_type
         string employment_status
-        uuid department_id FK
-        uuid position_id FK
-        uuid branch_id FK
-        uuid reporting_manager_id FK
+        bigint department_id FK
+        bigint position_id FK
+        bigint branch_id FK
+        bigint reporting_manager_id FK
         date probation_end_date
     }
 
-    DEPARTMENT {
-        uuid department_id PK
+    DEPARTMENTS {
+        bigint id PK
         string name
-        uuid parent_department_id FK
-        uuid branch_id FK
+        bigint parent_department_id FK
+        bigint branch_id FK
         boolean is_active
+        timestamp deleted_at
     }
 
-    POSITION {
-        uuid position_id PK
+    POSITIONS {
+        bigint id PK
         string title
-        uuid department_id FK
+        bigint department_id FK
         string grade_level
         boolean is_active
+        timestamp deleted_at
     }
 
-    BRANCH {
-        uuid branch_id PK
+    BRANCHES {
+        bigint id PK
         string name
         string location_address
         boolean is_active
+        timestamp deleted_at
     }
 
-    EMPLOYMENT_HISTORY {
-        uuid history_id PK
-        uuid employee_id FK
+    EMPLOYMENT_HISTORIES {
+        bigint id PK
+        bigint employee_id FK
         string event_type
         date effective_date
         string reason_category
-        uuid related_record_id
+        bigint related_record_id
         string related_record_type
-        uuid recorded_by_user_id FK
-        datetime created_at
+        bigint recorded_by_user_id FK
+        timestamp created_at
     }
 
-    EMPLOYEE_TRANSFER {
-        uuid transfer_id PK
-        uuid employee_id FK
-        uuid from_department_id FK
-        uuid to_department_id FK
-        uuid from_branch_id FK
-        uuid to_branch_id FK
+    EMPLOYEE_TRANSFERS {
+        bigint id PK
+        bigint employee_id FK
+        bigint from_department_id FK
+        bigint to_department_id FK
+        bigint from_branch_id FK
+        bigint to_branch_id FK
         date effective_date
         string reason
         string status
-        uuid requested_by_user_id FK
-        uuid approved_by_user_id FK
-        datetime requested_at
-        datetime decided_at
+        bigint requested_by_user_id FK
+        bigint approved_by_user_id FK
+        timestamp requested_at
+        timestamp decided_at
     }
 
-    EMPLOYEE_PROMOTION {
-        uuid promotion_id PK
-        uuid employee_id FK
-        uuid from_position_id FK
-        uuid to_position_id FK
+    EMPLOYEE_PROMOTIONS {
+        bigint id PK
+        bigint employee_id FK
+        bigint from_position_id FK
+        bigint to_position_id FK
         date effective_date
         string justification
         string status
-        uuid requested_by_user_id FK
-        uuid approved_by_user_id FK
-        datetime requested_at
-        datetime decided_at
+        bigint requested_by_user_id FK
+        bigint approved_by_user_id FK
+        timestamp requested_at
+        timestamp decided_at
     }
 
-    SEPARATION_RECORD {
-        uuid separation_id PK
-        uuid employee_id FK
+    SEPARATION_RECORDS {
+        bigint id PK
+        bigint employee_id FK
         string separation_type
         date last_working_day
         string reason_category
         string clearance_status
         string status
-        uuid requested_by_user_id FK
-        uuid approved_by_user_id FK
-        datetime requested_at
-        datetime decided_at
+        bigint requested_by_user_id FK
+        bigint approved_by_user_id FK
+        timestamp requested_at
+        timestamp decided_at
     }
 
-    EMPLOYEE_DOCUMENT {
-        uuid employee_document_id PK
-        uuid employee_id FK
+    EMPLOYEE_DOCUMENTS {
+        bigint id PK
+        bigint employee_id FK
         string document_type
-        string file_reference
-        datetime uploaded_at
-        uuid uploaded_by_user_id FK
+        string file_path
+        string disk
+        timestamp uploaded_at
+        bigint uploaded_by_user_id FK
     }
 
-    SELF_SERVICE_UPDATE_REQUEST {
-        uuid request_id PK
-        uuid employee_id FK
+    SELF_SERVICE_UPDATE_REQUESTS {
+        bigint id PK
+        bigint employee_id FK
         string field_group
         json proposed_changes
         string status
-        uuid reviewed_by_user_id FK
-        datetime submitted_at
-        datetime decided_at
+        bigint reviewed_by_user_id FK
+        timestamp submitted_at
+        timestamp decided_at
     }
 
-    EMPLOYEE_PROFILE {
-        uuid profile_id PK
-        uuid employee_id FK
+    EMPLOYEE_PROFILES {
+        bigint id PK
+        bigint employee_id FK
         int version
         string status
         json source_data_snapshot
         json ai_generated_sections
-        uuid ai_request_log_id FK
-        uuid reviewed_by_user_id FK
-        datetime generated_at
-        datetime approved_at
+        bigint ai_request_log_id FK
+        bigint reviewed_by_user_id FK
+        timestamp generated_at
+        timestamp approved_at
     }
 
-    DOCUMENT_TEMPLATE {
-        uuid template_id PK
+    DOCUMENT_TEMPLATES {
+        bigint id PK
         string document_type
         string name
         int version
         string status
         json field_schema
         text template_body
-        uuid published_by_user_id FK
-        datetime published_at
+        bigint published_by_user_id FK
+        timestamp published_at
     }
 
-    HR_DOCUMENT {
-        uuid document_id PK
-        uuid employee_id FK
-        uuid template_id FK
+    PROMPT_TEMPLATES {
+        bigint id PK
+        string task_type
+        string name
+        int version
+        string status
+        text system_instructions
+        text user_prompt_template
+        int token_budget
+        bigint published_by_user_id FK
+        timestamp published_at
+    }
+
+    HR_DOCUMENTS {
+        bigint id PK
+        bigint employee_id FK
+        bigint template_id FK
         string document_type
         string status
         text content
-        uuid ai_request_log_id FK
-        uuid created_by_user_id FK
-        uuid approved_by_user_id FK
-        uuid finalized_by_user_id FK
-        datetime created_at
-        datetime status_changed_at
+        bigint ai_request_log_id FK
+        bigint created_by_user_id FK
+        bigint approved_by_user_id FK
+        bigint finalized_by_user_id FK
+        timestamp created_at
+        timestamp status_changed_at
     }
 
     DOCUMENT_DRAFT_HISTORY {
-        uuid draft_history_id PK
-        uuid document_id FK
+        bigint id PK
+        bigint hr_document_id FK
         string action_type
         string from_status
         string to_status
         text content_snapshot
-        uuid actor_user_id FK
-        datetime occurred_at
+        bigint actor_user_id FK
+        timestamp occurred_at
     }
 
-    AI_REQUEST_LOG {
-        uuid ai_request_id PK
+    AI_REQUEST_LOGS {
+        bigint id PK
         string ai_feature
-        uuid employee_id FK
-        uuid initiated_by_user_id FK
-        string prompt_template_id
+        bigint employee_id FK
+        bigint initiated_by_user_id FK
+        bigint prompt_template_id FK
         int prompt_template_version
         string model_identifier
         string result_status
         json fields_included
         int input_token_count
         int output_token_count
-        datetime requested_at
-        datetime responded_at
+        timestamp requested_at
+        timestamp responded_at
     }
 
-    HR_AUDIT_LOG {
-        uuid audit_id PK
-        uuid actor_user_id FK
+    HR_AUDIT_LOGS {
+        bigint id PK
+        bigint actor_user_id FK
         string action_type
-        uuid affected_employee_id FK
-        uuid affected_document_id FK
-        uuid affected_profile_id FK
+        bigint affected_employee_id FK
+        bigint affected_hr_document_id FK
+        bigint affected_employee_profile_id FK
+        bigint ai_request_log_id FK
         string ai_feature_used
         string prompt_template_ref
         string model_ref
         string result_status
         string approval_action
-        datetime occurred_at
+        timestamp occurred_at
     }
 
-    USER {
-        uuid user_id PK
-        string username
-        string email
-        uuid linked_employee_id FK
-        boolean is_active
-        datetime created_at
-    }
-
-    ROLE {
-        uuid role_id PK
+    USERS {
+        bigint id PK
         string name
+        string email
+        string password
+        bigint linked_employee_id FK
+        boolean is_active
+        timestamp created_at
     }
 
-    PERMISSION {
-        uuid permission_id PK
+    ROLES {
+        bigint id PK
+        string name
+        string slug
+    }
+
+    PERMISSIONS {
+        bigint id PK
         string code
         string description
     }
 ```
 
-> Note: Mermaid `erDiagram` does not support many-to-many association tables natively
-> in a single relation line beyond `}o--o{`; the `USER }o--o{ ROLE` and
-> `ROLE }o--o{ PERMISSION` relations are implemented physically via join tables
-> (`UserRole`, `RolePermission`) in the actual schema.
+> Note: Mermaid `erDiagram` does not render pivot tables as first-class entities in a
+> single relation line beyond `}o--o{`; `role_user` and `role_permission` are the
+> physical pivot tables implementing the `USERS }o--o{ ROLES` and
+> `ROLES }o--o{ PERMISSIONS` many-to-many relationships shown above.
 
 ---
 
-## 3. Entity Descriptions
+## 3. Eloquent Models & Relationships
 
-### 3.1 Employee Master & Organization
+### 3.1 Employee master & organization
 
-| Entity | Purpose | Key notes |
-|---|---|---|
-| `Employee` | The authoritative employee master record; the canonical `employee_id` referenced by all other MMS groups. | Denormalized "current" position/department/branch/manager pointers for fast reads, backed by `EmploymentInfo` as the detailed record and `EmploymentHistory` as the append-only ledger of how it got there. |
-| `ContactInfo` | Personal/work contact details. | 1:1 with `Employee`. Tier 2 sensitivity (see `ai-architecture.md` §6.1) — excluded from AI context. |
-| `EmergencyContact` | One or more emergency contacts per employee. | 1:N. Excluded from AI context. |
-| `EmploymentInfo` | Detailed current employment attributes. | Could be merged into `Employee` for simplicity; kept separate here to isolate employment-specific fields from personal identity fields for cleaner access control (e.g., a payroll integration reads `EmploymentInfo`-shaped data without necessarily needing personal fields). |
-| `Department` | Organizational department, may be nested (parent department) for divisions/sub-departments. | `ASSUMPTION`: depth of nesting supported; default assumes up to a few levels. |
-| `Position` | Job title/role within a department, with an optional grade/level. | |
-| `Branch` | Physical/organizational location. | Referenced by Group 5 (Fleet) for vehicle/branch assignment and Group 7 for site-based scheduling. |
+| Model | Table | Key relationships (Eloquent) | Notes |
+|---|---|---|---|
+| `Employee` | `employees` | `hasOne(ContactInfo::class)`, `hasMany(EmergencyContact::class)`, `hasOne(EmploymentInfo::class)`, `hasMany(EmploymentHistory::class)`, `belongsTo(Department::class)`, `belongsTo(Position::class)`, `belongsTo(Branch::class)`, `belongsTo(Employee::class, 'manager_employee_id')` | Uses `SoftDeletes`. `employment_status` cast to a PHP backed `enum` (`EmploymentStatus::class`). |
+| `ContactInfo` | `contact_infos` | `belongsTo(Employee::class)` | Tier 2 sensitivity (see `ai-architecture.md` §6.1) — excluded from AI context. |
+| `EmergencyContact` | `emergency_contacts` | `belongsTo(Employee::class)` | Excluded from AI context. |
+| `EmploymentInfo` | `employment_infos` | `belongsTo(Employee::class)`, `belongsTo(Department::class)`, `belongsTo(Position::class)`, `belongsTo(Branch::class)` | Could be merged into `Employee`; kept separate to isolate employment-specific fields from personal identity fields for cleaner Policy scoping. |
+| `Department` | `departments` | `belongsTo(Department::class, 'parent_department_id')`, `hasMany(Department::class, 'parent_department_id')`, `hasMany(Position::class)`, `belongsTo(Branch::class)` | `SoftDeletes`. |
+| `Position` | `positions` | `belongsTo(Department::class)` | `SoftDeletes`. |
+| `Branch` | `branches` | `hasMany(Department::class)` | `SoftDeletes`. |
 
-### 3.2 Employment Lifecycle
+### 3.2 Employment lifecycle
 
-| Entity | Purpose | Key notes |
-|---|---|---|
-| `EmploymentHistory` | Append-only ledger of every employment-affecting event (hire, transfer, promotion, status change, separation). | Never updated/deleted; `related_record_id`/`related_record_type` point to the specific `EmployeeTransfer`/`EmployeePromotion`/`SeparationRecord` row that caused the entry, when applicable. |
-| `EmployeeTransfer` | Pending/approved/rejected department or branch change. | Workflow entity with `status` = `PENDING`/`APPROVED`/`REJECTED`. On approval, `Employee.current_department_id`/`current_branch_id` are updated and an `EmploymentHistory` row is appended. |
-| `EmployeePromotion` | Pending/approved/rejected position/grade change. | Same workflow pattern as `EmployeeTransfer`. |
-| `SeparationRecord` | Resignation or termination record. | `separation_type` = `RESIGNATION`/`TERMINATION`; on approval, `Employee.employment_status` becomes `RESIGNED`/`TERMINATED`. |
+| Model | Table | Key relationships | Notes |
+|---|---|---|---|
+| `EmploymentHistory` | `employment_histories` | `belongsTo(Employee::class)`, `belongsTo(User::class, 'recorded_by_user_id')`, polymorphic-style `related_record_id`/`related_record_type` pointing at the causing `EmployeeTransfer`/`EmployeePromotion`/`SeparationRecord` | Append-only: no `update()`/`delete()` route exposed; consider a model observer that prevents mutation after creation. |
+| `EmployeeTransfer` | `employee_transfers` | `belongsTo(Employee::class)`, `belongsTo(Department::class, 'from_department_id')`, `belongsTo(Department::class, 'to_department_id')`, `belongsTo(Branch::class, 'from_branch_id')`, `belongsTo(Branch::class, 'to_branch_id')` | `status` cast to enum (`pending`/`approved`/`rejected`). |
+| `EmployeePromotion` | `employee_promotions` | `belongsTo(Employee::class)`, `belongsTo(Position::class, 'from_position_id')`, `belongsTo(Position::class, 'to_position_id')` | Same workflow pattern as `EmployeeTransfer`. |
+| `SeparationRecord` | `separation_records` | `belongsTo(Employee::class)` | `separation_type` enum (`resignation`/`termination`). |
 
 ### 3.3 Documents (non-AI) & Self-Service
 
-| Entity | Purpose | Key notes |
-|---|---|---|
-| `EmployeeDocument` | Metadata for uploaded supporting files (signed contract, valid ID, certificates). | `file_reference` points to object storage; the file content itself is never sent to the AI service. |
-| `SelfServiceUpdateRequest` | Employee-submitted proposed changes to contact/emergency-contact data, pending HR approval. | `proposed_changes` stored as JSON diff; on approval, applied to `ContactInfo`/`EmergencyContact` and logged. |
+| Model | Table | Key relationships | Notes |
+|---|---|---|---|
+| `EmployeeDocument` | `employee_documents` | `belongsTo(Employee::class)`, `belongsTo(User::class, 'uploaded_by_user_id')` | `file_path`/`disk` used with Laravel's `Storage` facade; file bytes never sent to the AI service. |
+| `SelfServiceUpdateRequest` | `self_service_update_requests` | `belongsTo(Employee::class)`, `belongsTo(User::class, 'reviewed_by_user_id')` | `proposed_changes` cast to `array` (JSON column); applied to `ContactInfo`/`EmergencyContact` on approval. |
 
 ### 3.4 AI Profiling
 
-| Entity | Purpose | Key notes |
-|---|---|---|
-| `EmployeeProfile` | A generated (and, once approved, official) employee profile. | `status`: `DRAFT_GENERATED` → `APPROVED` (see `ai-architecture.md` §3.4); `version` increments per approved profile per employee; `source_data_snapshot` captures exactly which facts were used; `ai_generated_sections` holds the narrative text with per-section `groundingStatus`. |
+| Model | Table | Key relationships | Notes |
+|---|---|---|---|
+| `EmployeeProfile` | `employee_profiles` | `belongsTo(Employee::class)`, `belongsTo(AiRequestLog::class)`, `belongsTo(User::class, 'reviewed_by_user_id')` | `source_data_snapshot` and `ai_generated_sections` cast to `array`/JSON. `status` enum: `draft_generated` → `approved`. |
 
 ### 3.5 HR Document Drafting
 
-| Entity | Purpose | Key notes |
-|---|---|---|
-| `DocumentTemplate` | Versioned, HR-approved template per document type. | `field_schema` defines required/optional fields the template expects; `status`: `DRAFT`/`APPROVED`/`ARCHIVED` (template lifecycle, distinct from but analogous to document lifecycle). |
-| `HRDocument` | A generated or manually created HR document instance. | `status` follows `DRAFT → FOR_REVIEW → APPROVED → FINALIZED → ARCHIVED` (see `architecture.md` §9). `ai_request_log_id` is nullable — manually created documents have none. |
-| `DocumentDraftHistory` | Full history of edits/transitions for a given `HRDocument`. | Append-only; `content_snapshot` stores a full copy of content at that point (simpler than diffing, per `ai-architecture.md` §4.4 assumption). |
+| Model | Table | Key relationships | Notes |
+|---|---|---|---|
+| `DocumentTemplate` | `document_templates` | `hasMany(HrDocument::class, 'template_id')`, `belongsTo(User::class, 'published_by_user_id')` | `field_schema` cast to `array`. Template lifecycle (`draft`/`approved`/`archived`) is distinct from, but analogous to, the document lifecycle. |
+| `PromptTemplate` | `prompt_templates` | `hasMany(AiRequestLog::class)` | Drives `ai-architecture.md` §2.1/§5.4; versioned rows, not hardcoded strings, per `NFR-MAINT-02`. |
+| `HrDocument` | `hr_documents` | `belongsTo(Employee::class)`, `belongsTo(DocumentTemplate::class, 'template_id')`, `belongsTo(AiRequestLog::class)`, `hasMany(DocumentDraftHistory::class)` | `status` cast to enum (`draft`/`for_review`/`approved`/`finalized`/`archived`) matching `architecture.md` §9. |
+| `DocumentDraftHistory` | `document_draft_history` | `belongsTo(HrDocument::class)`, `belongsTo(User::class, 'actor_user_id')` | Append-only. |
 
 ### 3.6 AI Platform & Audit
 
-| Entity | Purpose | Key notes |
-|---|---|---|
-| `AIRequestLog` | One row per Gemini API call attempt. | Does **not** store raw prompt/response text (see `ai-architecture.md` §7.1); `fields_included` stores field *names* only. |
-| `HRAuditLog` | General-purpose, append-only business audit trail. | Captures both non-AI HR actions (CRUD, transitions) and AI-related human review decisions; cross-referenced to `AIRequestLog` via a shared correlation concept when applicable (`ASSUMPTION`: implement as an optional `ai_request_id` FK on `HRAuditLog`, or a shared `correlation_id`, per implementer preference). |
+| Model | Table | Key relationships | Notes |
+|---|---|---|---|
+| `AiRequestLog` | `ai_request_logs` | `belongsTo(Employee::class)`, `belongsTo(User::class, 'initiated_by_user_id')`, `belongsTo(PromptTemplate::class)` | Does **not** store raw prompt/response text (see `ai-architecture.md` §7.1); `fields_included` cast to `array`, stores field *names* only. |
+| `HrAuditLog` | `hr_audit_logs` | `belongsTo(User::class, 'actor_user_id')`, `belongsTo(Employee::class, 'affected_employee_id')`, `belongsTo(HrDocument::class, 'affected_hr_document_id')`, `belongsTo(EmployeeProfile::class, 'affected_employee_profile_id')`, `belongsTo(AiRequestLog::class)` | Append-only, no `updated_at` needed (single `occurred_at` timestamp is sufficient). |
 
 ### 3.7 Security
 
-| Entity | Purpose | Key notes |
-|---|---|---|
-| `User` | A system login/account, optionally linked to an `Employee` (for ESS access). | System Administrators and some HR staff may have a `User` without a corresponding `Employee` linkage assumption removed — `ASSUMPTION`: all system users are assumed to also be employees of the organization in most cases, but the model allows `linked_employee_id` to be null for pure system/service accounts. |
-| `Role` | A named role (HR Administrator, HR Manager, HR Staff, System Administrator, Employee). | |
-| `Permission` | A discrete, checkable capability (e.g., `ai.document.approve`, `employee.write`). | |
-| `RolePermission` (join) | Many-to-many mapping. | |
-| `UserRole` (join) | Many-to-many mapping (a user could conceivably hold more than one role, e.g., HR Manager who is also a System Administrator) `(ASSUMPTION: whether multi-role assignment is needed; default design supports it, simplest deployment may only ever assign one role per user)`. | |
+| Model | Table | Key relationships | Notes |
+|---|---|---|---|
+| `User` | `users` | `belongsTo(Employee::class, 'linked_employee_id')`, `belongsToMany(Role::class)` via `role_user`, `HasApiTokens` trait (Sanctum) | System Administrators and some HR staff may have a `User` without a corresponding `Employee` linkage — `linked_employee_id` nullable. |
+| `Role` | `roles` | `belongsToMany(User::class)`, `belongsToMany(Permission::class)` via `role_permission` | Seeded via a `RoleSeeder` with the five roles from `requirements.md` §6. |
+| `Permission` | `permissions` | `belongsToMany(Role::class)` | Seeded via a `PermissionSeeder`; codes match the Gate/Policy permission strings referenced throughout `architecture.md`/`ai-architecture.md` (e.g., `ai.profile.generate`, `ai.document.approve`). |
 
 ---
 
-## 4. Key Design Decisions & Rationale
+## 4. Factories & Seeders (planned, not yet implemented)
+
+Per the task brief's instruction to use Laravel factories and seeders (none created in
+this analysis phase):
+
+| Factory | Purpose |
+|---|---|
+| `EmployeeFactory` | Generates realistic fake employees for local development/testing (`fake()->name()`, etc.), with states like `->terminated()`, `->onProbation()` for testing lifecycle edge cases. |
+| `DepartmentFactory`, `PositionFactory`, `BranchFactory` | Generate a small representative org structure for local dev. |
+| `EmploymentHistoryFactory`, `EmployeeTransferFactory`, `EmployeePromotionFactory`, `SeparationRecordFactory` | Generate lifecycle event fixtures for testing workflows and approvals. |
+| `DocumentTemplateFactory` | Seeds one template per document type listed in `requirements.md` §4.3 (`FR-DOC-11`) for local development, marked `approved` so generation can be tested end-to-end without a manual template-authoring step. |
+| `PromptTemplateFactory` | Seeds the initial profiling + per-document-type prompt templates (version 1) referenced throughout `ai-architecture.md`. |
+| `UserFactory` (Laravel default, extended) | Adds a `->withRole('hr_admin')` style state helper for test setup. |
+
+| Seeder | Purpose |
+|---|---|
+| `RoleSeeder` | Creates the five roles from `requirements.md` §6 (HR Administrator, HR Manager, HR Staff, System Administrator, Employee). |
+| `PermissionSeeder` | Creates the permission codes referenced by Policies/Gates across `architecture.md`/`ai-architecture.md`, and attaches them to roles per the permission matrix in `requirements.md` §6.1. |
+| `DocumentTemplateSeeder` | Seeds one `approved` template per required document type (`FR-DOC-11`) so the drafting workflow is testable immediately in a fresh environment. |
+| `PromptTemplateSeeder` | Seeds the baseline AI prompt templates referenced in `ai-architecture.md` §5.4. |
+| `DatabaseSeeder` | Orchestrates the above in dependency order; optionally calls the factories above under `app()->environment('local')` to populate demo data. |
+
+Running `php artisan migrate:fresh --seed` should be sufficient to stand up a fully
+working, demo-ready Core HR database from nothing — satisfying `NFR-REPR-01`.
+
+---
+
+## 5. Key Design Decisions & Rationale
 
 1. **Separation of `Employee` (identity) from `EmploymentInfo` (current employment
-   state) from `EmploymentHistory` (ledger)** — allows different access-control and
-   AI-eligibility rules to be applied per concern, and gives a clean audit trail
-   without overloading the mutable master record.
-2. **Workflow entities (`EmployeeTransfer`, `EmployeePromotion`, `SeparationRecord`)
-   are separate from the ledger (`EmploymentHistory`)** — the workflow entity captures
-   the approval process (who requested, who approved, when), while the ledger captures
-   the resulting fact, keeping the "did this actually happen and take effect" question
-   simple to answer even if workflow entities are later archived/pruned.
+   state) from `EmploymentHistory` (ledger)** — allows different Policy/authorization
+   rules and AI-eligibility rules to be applied per concern, and gives a clean audit
+   trail without overloading the mutable master record.
+2. **Workflow models (`EmployeeTransfer`, `EmployeePromotion`, `SeparationRecord`) are
+   separate from the ledger (`EmploymentHistory`)** — the workflow model captures the
+   approval process (who requested, who approved, when), while the ledger captures the
+   resulting fact, keeping "did this actually happen and take effect" simple to answer
+   even if workflow rows are later archived/pruned.
 3. **`EmployeeProfile.source_data_snapshot` is denormalized/duplicated from live
-   data** — deliberately, so that an approved profile remains a faithful record of
-   what was true *at generation time*, even if the employee's live record changes
-   afterward (avoiding the "official record silently changes underneath you" problem).
-4. **`AIRequestLog` stores metadata, not raw content** — directly implements the
+   data** — deliberately, via a JSON column, so an approved profile remains a faithful
+   record of what was true *at generation time*, even if the employee's live record
+   changes afterward.
+4. **`AiRequestLog` stores metadata, not raw content** — directly implements the
    privacy requirement to avoid unnecessarily persisting sensitive prompts/responses;
-   the actual approved content lives in `EmployeeProfile`/`HRDocument`, which are
-   already access-controlled domain records.
-5. **`HRAuditLog` is generic/polymorphic** (nullable `affected_employee_id`,
-   `affected_document_id`, `affected_profile_id`) rather than one audit table per
-   entity type — simplifies querying "everything that happened" for compliance
-   reviews at the cost of some referential strictness; acceptable for an audit trail
-   which is inherently descriptive rather than transactional.
-6. **Document templates are versioned independently of documents** — a `HRDocument`
+   the actual approved content lives in `EmployeeProfile`/`HrDocument`, which are
+   already access-controlled via Policies.
+5. **`HrAuditLog` is generic/polymorphic-style** (nullable `affected_employee_id`,
+   `affected_hr_document_id`, `affected_employee_profile_id`) rather than one audit
+   table per entity type — simplifies querying "everything that happened" for
+   compliance reviews at the cost of some referential strictness; acceptable for an
+   audit trail which is inherently descriptive rather than transactional.
+6. **Document templates are versioned independently of documents** — an `HrDocument`
    pins the exact `template_id`/version it was generated from, so template edits never
    retroactively alter the meaning of already-generated documents.
+7. **Prompt templates live in the database (`prompt_templates` table), not in PHP
+   code** — satisfies `NFR-MAINT-02` (non-engineering review of AI wording) and lets
+   `ai-architecture.md`'s versioning/governance model work without deployments.
+8. **Soft deletes on org-structure tables** (`departments`, `positions`, `branches`)
+   — preferred over hard delete so historical foreign keys (e.g., an old
+   `EmploymentHistory` row pointing at a since-removed position) remain valid and
+   queryable.
 
 ---
 
-## 5. Representative Indexing & Constraint Notes
+## 6. Representative Indexing & Constraint Notes
 
 `ASSUMPTION`: These are implementation-phase recommendations, not confirmed
-requirements; included to keep the design credible and immediately actionable, not to
-prescribe final DDL.
+requirements; included to keep the design credible and immediately actionable via
+Laravel migration `$table->index()`/`$table->foreign()` calls.
 
-- Unique constraint on `Employee.employee_id` (PK) and a separate human-readable
-  `employee_number` if the client wants a display-friendly code distinct from the
-  internal UUID `(ASSUMPTION: whether a separate display employee number is needed)`.
-- Index on `EmploymentHistory(employee_id, effective_date)` for fast history reads.
-- Index on `HRDocument(employee_id, status)` and `HRDocument(status)` to support
-  reviewer queue views ("all documents `FOR_REVIEW`").
-- Index on `AIRequestLog(employee_id, requested_at)` and `AIRequestLog(result_status)`
-  for monitoring/cost dashboards.
-- Foreign key `Employee.manager_employee_id → Employee.employee_id` is self-referential
-  and nullable (top-of-hierarchy employees have no manager).
-- Soft-delete (`is_active` / `archived_at`) preferred over hard delete for
-  `Department`, `Position`, `Branch`, and `DocumentTemplate` to preserve referential
-  integrity of historical records that point to them.
+- `employees`: index on `department_id`, `position_id`, `branch_id`,
+  `manager_employee_id` (all FKs); consider a unique `employee_number` string column
+  if the client wants a display-friendly code distinct from the internal `id`
+  (`ASSUMPTION`: whether a separate display employee number is needed).
+- `employment_histories`: composite index on `(employee_id, effective_date)` for fast
+  history reads; foreign key `employee_id` with `onDelete('restrict')` (never cascade
+  delete an employee's history).
+- `hr_documents`: index on `(employee_id, status)` and `status` alone, to support
+  reviewer queue views ("all documents `for_review`").
+- `ai_request_logs`: index on `(employee_id, requested_at)` and `result_status`, for
+  monitoring/cost dashboards.
+- `employees.manager_employee_id`: self-referential foreign key, nullable (top-of-
+  hierarchy employees have no manager); `onDelete('set null')`.
+- All foreign keys use Laravel's `foreignId()->constrained()` migration helper with an
+  explicit `onDelete()` policy chosen per relationship (`cascade` only where child rows
+  are meaningless without the parent, e.g., `contact_infos` cascading with `employees`;
+  `restrict` for historical/audit-adjacent tables).
+- MySQL-specific column choices: `json` columns (`source_data_snapshot`,
+  `ai_generated_sections`, `field_schema`, `proposed_changes`, `fields_included`)
+  require **MySQL 5.7.8+** (MySQL 8.0, as proposed, fully supports the native `JSON`
+  type Laravel's `json()` migration method maps to).
+- Enum-like columns (`employment_status`, document/profile `status`, `separation_type`,
+  etc.) are implemented as Laravel `string` columns backed by PHP 8.1+ backed
+  `enum` classes on the Eloquent model (`casts()` / `$casts` array) rather than native
+  MySQL `ENUM` columns — this is the standard modern-Laravel approach and keeps the
+  valid-value list in versioned PHP code (easy to diff in code review) instead of
+  buried in the database schema.
 
 ---
 
-*End of `database-design.md`. See [`integration-contract.md`](./integration-contract.md)
-for how these entities are exposed (in read-only, minimized form) to other MMS groups.*
+*End of `database-design.md`. See [`api-contract.md`](./api-contract.md) for how these
+Eloquent models are exposed via API Resources, and
+[`integration-contract.md`](./integration-contract.md) for how this data is shared
+(read-only, minimized) with other MMS groups.*

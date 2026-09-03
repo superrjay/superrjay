@@ -1,13 +1,19 @@
-# Core HR (Group 4) — System Architecture
+# Core HR (Group 4) — System Architecture (Laravel + React)
 
 **Related documents:**
+[`project-analysis.md`](./project-analysis.md) ·
 [`requirements.md`](./requirements.md) ·
 [`ai-architecture.md`](./ai-architecture.md) ·
 [`database-design.md`](./database-design.md) ·
+[`api-contract.md`](./api-contract.md) ·
 [`integration-contract.md`](./integration-contract.md)
 
-**Status:** Draft. Deployment topology, hosting, and infra choices are marked
-`ASSUMPTION` where not yet confirmed by the client/infra team.
+**Status:** Draft, green-field design (no existing Laravel/React project was found in
+this repository — see [`project-analysis.md`](./project-analysis.md)). Technology
+choices required by the task brief (Laravel, React, MySQL, Gemini) are treated as
+fixed; choices not specified by the brief (exact Laravel/PHP version, auth package,
+deployment topology) are marked `ASSUMPTION` and must be confirmed or reconciled with
+any real base project the client ultimately provides.
 
 ---
 
@@ -16,42 +22,53 @@
 1. **Core HR is the single source of truth** for employee master data and
    organizational structure across the entire Microfinancial Management System (MMS).
    No other group persists its own copy of these facts; they either call Core HR's
-   APIs at read time or consume published domain events.
-2. **AI is assistive, never authoritative.** The AI Service can only produce `DRAFT`
-   artifacts. It has no write access to authoritative tables and no capability to
-   invoke approval, finalize, or transmit actions.
+   Laravel REST API at read time or consume published domain events.
+2. **AI is assistive, never authoritative.** The Gemini/AI service can only produce
+   `draft` Eloquent records (`employee_profiles`, `hr_documents`). It has no
+   permission to write to authoritative tables (`employees`, `employment_infos`,
+   `employment_histories`, etc.) and no code path that invokes approval, finalize, or
+   transmit actions.
 3. **Clear module boundaries.** Core HR is decomposed into cohesive modules (see
-   `requirements.md` §9) that map to bounded contexts, each with its own data
-   ownership within the Core HR database.
-4. **Defense in depth for sensitive data.** RBAC, data minimization, and audit logging
-   are layered, not relied upon individually.
-5. **Loose coupling with other groups.** Integration happens through versioned APIs
-   and/or asynchronous domain events, never direct cross-group database access.
-6. **Provider abstraction.** The Gemini integration sits behind an internal `AIProvider`
-   interface so the concrete LLM vendor/SDK can change without impacting business logic.
+   `requirements.md` §9) that map 1:1 to Laravel domains — a set of Eloquent models,
+   a service class, one or more Form Requests, a Policy, and a resourceful controller
+   per module.
+4. **Defense in depth for sensitive data.** Laravel Sanctum authentication, Policy-based
+   RBAC, Form Request validation, data minimization before any Gemini call, and audit
+   logging are layered, not relied upon individually.
+5. **Loose coupling with other groups.** Integration happens through the versioned
+   Laravel REST API (`/api/core-hr/v1/...`) and/or asynchronous domain events, never
+   direct cross-group database access — regardless of whether Core HR ends up
+   deployed as its own Laravel application or as a module inside a shared monolith
+   (see `project-analysis.md` §2.3, Assumption A0).
+6. **Provider abstraction.** The Gemini integration sits behind an internal PHP
+   interface (`App\Services\AI\Contracts\AIProviderInterface`, or similar) bound in the
+   Laravel service container, so the concrete LLM vendor/SDK can change without
+   impacting calling code.
+7. **Framework-idiomatic by default.** Where the brief does not dictate a specific
+   mechanism, this design follows standard Laravel conventions (Form Requests, API
+   Resources, Policies, Eloquent relationships, migrations/factories/seeders) rather
+   than inventing custom patterns, so the codebase is approachable to any Laravel
+   developer joining the project.
 
 ---
 
 ## 2. Complete System-Level Architecture Diagram
 
-This is the consolidated, system-level view of Group 4 — Core HR requested for
-onboarding new contributors and for client walkthroughs. It shows, in one diagram: the
-user-to-module request path, the internal Core HR module breakdown, the full
-Gemini-assisted AI pipeline (from context building through mandatory human review), the
-Core HR database and which data it owns, and the integration boundary with the other
-MMS subsystem groups. More detailed diagrams for each of these areas (layered
-architecture, deployment, AI internals, ER model) follow in the sections after this one
-and in the companion documents.
+This is the consolidated, system-level view of Group 4 — Core HR, grounded in the
+Laravel + React stack. It shows the user-to-module request path through the Laravel
+API, the internal Core HR module breakdown, the full Gemini-assisted AI pipeline (from
+context building through mandatory human review), the MySQL database and which data it
+owns, and the integration boundary with the other MMS subsystem groups.
 
 ```mermaid
 flowchart TB
     User["User / HR Staff\n(HR Admin, HR Manager, HR Staff, Employee-ESS)"]
-    FE["Frontend\n(HR Web App + Employee Self-Service Portal)"]
+    FE["React Frontend (SPA)\n(HR Web App + Employee Self-Service views)"]
 
-    subgraph Boundary["Group 4 — Core HR Subsystem (system boundary)"]
-        API["Core HR Backend / API\n(AuthN/AuthZ + RBAC enforced at gateway)"]
+    subgraph Boundary["Group 4 — Core HR Laravel Application (system boundary)"]
+        API["Laravel REST API\n(routes/api.php, Sanctum auth + Policy/RBAC middleware)"]
 
-        subgraph Modules["Core HR Modules"]
+        subgraph Modules["Laravel Controllers -> Services -> Eloquent Models"]
             direction LR
             M1["Employee\nManagement"]
             M2["Organization\nManagement"]
@@ -61,17 +78,17 @@ flowchart TB
             M6["Document\nDrafting"]
             M7["Audit\nLogging"]
         end
-        M8["Authentication / RBAC"]
+        M8["Authentication / RBAC\n(Sanctum + Policies)"]
 
-        DB[("Core HR Database\n(authoritative employee and org data)")]
+        DB[("MySQL Database\n(authoritative employee and org data)")]
 
-        subgraph AIPipeline["AI Service Pipeline (assistive only, see ai-architecture.md)"]
+        subgraph AIPipeline["AI/Gemini Service Pipeline (assistive only, see ai-architecture.md)"]
             direction TB
-            AISvc["AI Service"]
+            AISvc["GeminiService\n(App/Services/AI)"]
             CtxB["Context Builder\n(data-minimization allow-list)"]
-            Prompt["Prompt Template\n(versioned, task-specific)"]
+            Prompt["Prompt Template\n(versioned DB record)"]
             OutVal["AI Output Validation\n(schema + fact-grounding check)"]
-            Review["Human Review\n(HR Manager or Admin)"]
+            Review["Human Review\n(React review UI, HR Manager or Admin)"]
             Approved["Approved Result"]
         end
     end
@@ -86,7 +103,7 @@ flowchart TB
         G8["Group 8\nPerformance"]
     end
 
-    Gemini[("Google Gemini API\n(external, server-side call only)")]
+    Gemini[("Google Gemini API\n(external, called from Laravel only)")]
 
     User --> FE --> API
     API --> Modules
@@ -106,7 +123,7 @@ flowchart TB
     AISvc --> CtxB
     CtxB -. reads approved, minimized fields .-> DB
     CtxB --> Prompt
-    Prompt -->|"server-side call only, API key never exposed"| Gemini
+    Prompt -->|"Laravel HTTP client, server-side only,\nAPI key from .env, never exposed to React"| Gemini
     Gemini --> OutVal
     OutVal --> Review
     Review -->|"edit / reject"| AISvc
@@ -117,254 +134,263 @@ flowchart TB
 
 ### 2.1 Reading the diagram
 
-- **Request path (top-down, as specified):** `User/HR Staff → Frontend → Core HR
-  Backend/API → {Employee Management, Organization Management, Employment Lifecycle,
-  Employee Documents, Employee Profiling, Document Drafting, Audit Logging,
-  Authentication/RBAC}`. The API is the single entry point and fans out to all eight
-  modules (the `Core HR Modules` box groups the first seven for readability; every
-  module inside it is reached directly from the API exactly as listed). `Authentication
-  / RBAC` (`M8`) is drawn separately with a dotted "enforces RBAC on" edge into that
-  group because it is a cross-cutting gate in front of every other module's actions,
-  not a downstream data consumer like the rest — in the request pipeline it is
-  evaluated *before* a request reaches any of the other seven modules.
-- **Database access:** the `Core HR Modules` group has a single (aggregated) edge into
-  the `Core HR Database` representing that `Employee Management`, `Organization
-  Management`, `Employment Lifecycle`, `Employee Documents`, and `Audit Logging` each
-  read/write their respective tables there directly; `Employee Profiling` and `Document
-  Drafting` reach the database only indirectly, through the AI pipeline's `Context
-  Builder` (read) and `Approved Result` (write) steps described next.
-- **AI pipeline (as specified):** `Core HR (Employee Profiling / Document Drafting
-  modules) → AI Service → Context Builder → Prompt Template → Gemini API → AI Output
-  Validation → Human Review → Approved Result`. Only `Employee Profiling` and
-  `Document Drafting` ever trigger this pipeline; every other module has no path into
-  it. `Human Review` is the only node with the authority to produce an `Approved
-  Result`; a reject/edit decision loops back to `AI Service` rather than reaching
-  `Approved Result`, so there is no path from `Gemini API` to `Approved Result` that
-  skips a human. `Approved Result` is what gets persisted back to the `Core HR
-  Database` as the official `EmployeeProfile`/`HRDocument` record.
-- **Database ownership:** a single `Core HR Database` is shown; §2.2 below identifies
-  exactly which data in it Core HR owns as the authoritative source, versus data
-  explicitly excluded/owned elsewhere.
-- **Integration boundaries:** the dashed box labeled `Group 4 — Core HR Subsystem
-  (system boundary)` marks what Group 4 owns and controls; the separate `Other MMS
-  Subsystems (integration boundary)` box groups Groups 2, 3, 5, 6, 7, and 8. Every
-  arrow crossing between the two boundaries goes through the `Core HR Backend / API`
-  node and is drawn as a dash-dot line labeled with its direction/nature (read-only
-  query, change event, or the one narrow write exception for Group 2 creating an
-  employee on hire) — no other group has a solid (direct/internal) connection into Core
-  HR's modules, database, or AI pipeline. Full per-group contract detail (exact
-  endpoints and event payloads) is in [`integration-contract.md`](./integration-contract.md).
+- **Request path (top-down, as specified):** `React Frontend → Laravel REST API →
+  Laravel Services (behind Controllers) → {Employee Management, Organization
+  Management, Employment Lifecycle, Employee Documents, Employee Profiling, Document
+  Drafting, Audit Logging}`, gated throughout by `Authentication / RBAC` (Sanctum +
+  Policies), matching the brief's required flow `React → Laravel REST API → Laravel
+  Services → MySQL`.
+- **Database access:** the `Modules` group's Laravel services read/write MySQL through
+  Eloquent models. `Employee Profiling` and `Document Drafting` reach the database only
+  indirectly — through the AI pipeline's `Context Builder` (read) and `Approved Result`
+  (write) steps — never by handing the model directly to Gemini.
+- **AI pipeline (as specified):** `Core HR → AI/Gemini Service → Context Builder →
+  Prompt Template → Gemini API → AI Output Validation → Human Review → Approved
+  Result`, matching the brief's required AI flow `React → Laravel API → AI/Gemini
+  Service → Google Gemini API → AI Output Validation → React Review Interface`. Only
+  `Employee Profiling` and `Document Drafting` ever trigger this pipeline. `Human
+  Review` (rendered in the React review UI) is the only step with authority to produce
+  an `Approved Result`; a reject/edit decision loops back to `GeminiService` rather than
+  reaching `Approved Result`.
+- **Database ownership:** a single MySQL database is shown; §2.2 identifies exactly
+  which tables/data Core HR owns as the authoritative source, versus data owned by
+  other groups.
+- **Integration boundaries:** the dashed `Group 4 — Core HR Laravel Application`
+  boundary marks what Group 4 owns and controls; the `Other MMS Subsystems` boundary
+  groups Groups 2, 3, 5, 6, 7, and 8. Every cross-boundary arrow passes through the
+  Laravel REST API and is authenticated (Sanctum personal access tokens for
+  service-to-service calls — see `api-contract.md` §3) — no other group has direct
+  database access into Core HR's MySQL instance.
 
 ### 2.2 Database data ownership
 
-| Data category (stored in the Core HR Database) | Owned by Core HR? | Notes |
+| Data category (stored in Core HR's MySQL database) | Owned by Core HR? | Notes |
 |---|---|---|
-| Employee master data (identity, personal info, contact info, emergency contacts) | ✅ Yes — authoritative | Sole source of truth; see `database-design.md` §3.1 |
+| Employee master data (identity, personal info, contact info, emergency contacts) | ✅ Yes — authoritative | Sole source of truth; see `database-design.md` §3 |
 | Employment info (status, department, position, branch, manager) | ✅ Yes — authoritative | |
 | Organizational structure (departments, positions, branches, reporting lines) | ✅ Yes — authoritative | |
 | Employment history ledger (hires, transfers, promotions, separations) | ✅ Yes — authoritative | Append-only |
-| Employee documents metadata (IDs, contracts, certificates) | ✅ Yes — authoritative | File bytes may live in separate object storage; Core HR owns the metadata/ownership record |
+| Employee documents metadata (IDs, contracts, certificates) | ✅ Yes — authoritative | File bytes stored via Laravel's filesystem/storage abstraction; the `employee_documents` table owns the metadata/ownership record |
 | Document templates | ✅ Yes — authoritative | |
-| Generated `HRDocument` drafts/approved documents + draft history | ✅ Yes — authoritative | |
-| Generated `EmployeeProfile` records (source data + AI narrative) | ✅ Yes — authoritative | |
-| `AIRequestLog` (AI generation metadata) | ✅ Yes — authoritative | Metadata only, not raw prompts (see `ai-architecture.md` §7) |
-| `HRAuditLog` (HR + AI audit trail) | ✅ Yes — authoritative | |
-| User accounts, roles, permissions (for Core HR access) | ✅ Yes — authoritative | Scoped to Core HR's own RBAC; a platform-wide identity provider, if one exists, is `ASSUMPTION`-flagged as out of scope here |
-| Payroll figures, salary, bank/financial account details | ❌ No | Owned by **Group 6 — Payroll & Benefits**; never stored in or duplicated into Core HR |
+| Generated `hr_documents` drafts/approved documents + draft history | ✅ Yes — authoritative | |
+| Generated `employee_profiles` (source data + AI narrative) | ✅ Yes — authoritative | |
+| `ai_request_logs` (AI generation metadata) | ✅ Yes — authoritative | Metadata only, not raw prompts (see `ai-architecture.md` §7) |
+| `hr_audit_logs` (HR + AI audit trail) | ✅ Yes — authoritative | |
+| `users`, roles, permissions (for Core HR access) | ✅ Yes — authoritative | Scoped to Core HR's own Sanctum-authenticated users; a platform-wide identity provider, if one exists across all 8 groups, is `ASSUMPTION`-flagged as out of scope here |
+| Payroll figures, salary, bank/financial account details | ❌ No | Owned by **Group 6 — Payroll & Benefits**; never stored in or duplicated into Core HR's MySQL schema |
 | Attendance, shift schedules, timesheets, leave balances | ❌ No | Owned by **Group 7 — Workforce Management** |
 | Performance ratings, competency scores, succession plans | ❌ No | Owned by **Group 8 — Performance & Development** |
-| Applicant/candidate data prior to hire, job requisitions | ❌ No | Owned by **Group 2 — Recruitment & Onboarding** (Core HR only receives the resulting employee record at hire time, per §2.3 of `integration-contract.md`) |
+| Applicant/candidate data prior to hire, job requisitions | ❌ No | Owned by **Group 2 — Recruitment & Onboarding** (Core HR only receives the resulting employee record at hire time, per `integration-contract.md` §2.3) |
 | Vehicle/trip/fleet records | ❌ No | Owned by **Group 5 — Fleet & Transportation Management** |
 | General ledger, disbursements, financial transactions | ❌ No | Owned by **Group 3 — Financial Management System** |
-| Inventory/procurement records | ❌ No | Owned by **Group 1 — Supply Chain & Inventory Management** (not shown in the diagram above per the requested scope, but excluded on the same basis) |
-
-This table is the practical, data-level expression of the architectural principle in
-§1: Core HR owns identity/org/employment/document/profile/audit data outright, and
-explicitly does not duplicate data that another group already owns as its source of
-truth.
+| Inventory/procurement records | ❌ No | Owned by **Group 1 — Supply Chain & Inventory Management** |
 
 ---
 
-## 3. High-Level System Context
+## 3. Backend Layered Architecture (Laravel)
 
 ```mermaid
 flowchart TB
-    subgraph Clients
-        WebUI["Core HR Web App\n(HR Admin/Manager/Staff UI)"]
-        ESSUI[Employee Self-Service\nWeb Portal]
+    subgraph HTTP["HTTP Layer (routes/api.php)"]
+        Route["Route -> Controller@action"]
     end
 
-    subgraph Group4["Group 4 — Core HR Subsystem"]
-        API["Core HR API Gateway\n(REST/JSON, versioned)"]
-        CoreSvc["Core HR Domain Services\n(Employee, Org, Lifecycle, Documents)"]
-        AISvc["AI Service Module\n(Gemini integration)"]
-        DB[(Core HR Database)]
-        Audit[(Audit Log Store)]
+    subgraph Controller["Controllers (thin)"]
+        Ctrl["Resourceful API Controllers\n(EmployeeController, DepartmentController,\nEmployeeProfileController, HrDocumentController, ...)"]
     end
 
-    Gemini[(Google Gemini API)]
-
-    subgraph OtherGroups["Other MMS Subsystems (Groups 1,2,3,5,6,7,8)"]
-        G2[Group 2\nRecruitment & Onboarding]
-        G6[Group 6\nPayroll & Benefits]
-        G7[Group 7\nWorkforce Management]
-        G8[Group 8\nPerformance & Development]
-        G5[Group 5\nFleet & Transportation]
-        G13[Groups 1 & 3\nInventory / Financial]
+    subgraph Validation["Validation"]
+        FR["Form Requests\n(StoreEmployeeRequest, UpdateEmployeeRequest,\nGenerateProfileRequest, GenerateDocumentRequest, ...)"]
     end
 
-    WebUI --> API
-    ESSUI --> API
-    API --> CoreSvc
-    API --> AISvc
-    CoreSvc --> DB
-    CoreSvc --> Audit
-    AISvc --> Audit
-    AISvc -->|server-side only,\nAPI key never exposed| Gemini
-    AISvc -.reads via CoreSvc.-> DB
-
-    G2 -->|reads employee/org data| API
-    G6 -->|reads employee/org data| API
-    G7 -->|reads employee/org data| API
-    G8 -->|reads employee/org data| API
-    G5 -->|reads employee/org data| API
-    G13 -->|reads employee/org data| API
-
-    CoreSvc -.publishes domain events\n(employee hired/updated/\ntransferred/terminated).-> EventBus[(Event Bus / Webhook\nASSUMPTION: technology TBD)]
-    EventBus -.-> G2
-    EventBus -.-> G6
-    EventBus -.-> G7
-    EventBus -.-> G8
-```
-
-`ASSUMPTION`: The exact event-bus technology (message broker vs. webhook callbacks vs.
-polling) is not yet specified by the client/infra team. Both a synchronous API and an
-asynchronous event option are described in `integration-contract.md` so the final
-choice can be made without redesigning the domain model.
-
----
-
-## 4. Layered Architecture (within Group 4)
-
-```mermaid
-flowchart TB
-    subgraph Presentation["Presentation Layer"]
-        A1[HR Web App]
-        A2[ESS Web Portal]
+    subgraph AuthZ["Authorization"]
+        Policy["Policies / Gates\n(EmployeePolicy, HrDocumentPolicy,\nEmployeeProfilePolicy, ...)"]
     end
 
-    subgraph API_Layer["API / Gateway Layer"]
-        B1[Core HR REST API]
-        B2[AuthN/AuthZ Middleware\nRBAC enforcement]
-        B3[Rate limiting & request logging]
-    end
-
-    subgraph Application["Application / Service Layer"]
-        C1[Employee Service]
-        C2[Organization Service]
-        C3["Employment Lifecycle Service\n(Transfers/Promotions/Offboarding)"]
-        C4[Document & Template Service]
-        C5[Employee Profile Service]
-        C6[Self-Service Request Service]
-        C7[Audit Service]
-        C8[AI Orchestration Service]
+    subgraph Service["Application Services"]
+        S1["EmployeeService"]
+        S2["OrganizationService\n(Department/Position/Branch)"]
+        S3["EmploymentLifecycleService\n(Transfers/Promotions/Separations)"]
+        S4["EmployeeDocumentService"]
+        S5["EmployeeProfileService"]
+        S6["HrDocumentService"]
+        S7["AuditLogService"]
     end
 
     subgraph AIModule["AI Service Module (see ai-architecture.md)"]
-        D1[Context Builder /\nData Minimization Filter]
-        D2[Prompt Template Engine]
-        D3[Gemini Client Adapter]
-        D4[Input/Output Validator]
-        D5[AI Request Logger]
+        A1["GeminiContextBuilder"]
+        A2["PromptTemplateEngine"]
+        A3["GeminiClient\n(implements AIProviderInterface)"]
+        A4["AIOutputValidator"]
+        A5["AIRequestLogger"]
     end
 
-    subgraph Persistence["Persistence Layer"]
-        E1[(Core HR Relational DB)]
-        E2[(Document/File Storage)]
-        E3[(Audit Log Store)]
+    subgraph Eloquent["Eloquent Models"]
+        E1["Employee, ContactInfo, EmergencyContact,\nEmploymentInfo"]
+        E2["Department, Position, Branch"]
+        E3["EmploymentHistory, EmployeeTransfer,\nEmployeePromotion, SeparationRecord"]
+        E4["EmployeeDocument"]
+        E5["EmployeeProfile"]
+        E6["DocumentTemplate, HrDocument,\nDocumentDraftHistory"]
+        E7["AiRequestLog, HrAuditLog"]
+        E8["User, Role, Permission"]
     end
 
-    subgraph External["External"]
-        F1[(Google Gemini API)]
-        F2[Other MMS Subsystems]
-    end
+    DB[("MySQL")]
+    Gemini[("Google Gemini API")]
 
-    A1 --> B1
-    A2 --> B1
-    B1 --> B2 --> B3 --> Application
-    C1 --> E1
-    C2 --> E1
-    C3 --> E1
-    C3 --> C7
-    C4 --> E1
-    C4 --> E2
-    C5 --> C8
-    C6 --> C7
-    C8 --> D1 --> D2 --> D3 --> F1
-    D3 --> D4 --> C8
-    C8 --> D5 --> E3
-    C7 --> E3
-    C1 -->|read-only exposure| F2
-    C2 -->|read-only exposure| F2
+    Route --> Ctrl --> FR --> Policy --> Service
+    S1 --> E1 --> DB
+    S2 --> E2 --> DB
+    S3 --> E3 --> DB
+    S3 --> S7
+    S4 --> E4 --> DB
+    S5 --> AIModule
+    S6 --> AIModule
+    S6 --> E6 --> DB
+    S5 --> E5 --> DB
+    A1 -->|reads via Service layer, not raw queries| E1
+    A3 -->|HTTP client call| Gemini
+    A5 --> E7 --> DB
+    S7 --> E7
+    E8 --> DB
 ```
 
----
+### 3.1 Layer responsibilities
 
-## 5. Module Responsibilities
-
-| Layer | Module | Responsibility | Talks to |
-|---|---|---|---|
-| Application | **Employee Service** | CRUD for employee master/personal/contact/emergency data; enforces field-level RBAC. | Core HR DB, Audit Service |
-| Application | **Organization Service** | Departments, positions, branches, reporting hierarchy. | Core HR DB, Audit Service |
-| Application | **Employment Lifecycle Service** | Transfers, promotions, resignation/termination workflows; append-only employment history ledger; status-change approvals. | Core HR DB, Audit Service, publishes domain events |
-| Application | **Document & Template Service** | Employee document uploads (metadata + storage pointer); HR document templates; generated document lifecycle state machine. | Core HR DB, Document/File Storage, AI Orchestration Service, Audit Service |
-| Application | **Employee Profile Service** | Orchestrates AI profile generation requests, review, versioning of approved profiles. | AI Orchestration Service, Core HR DB, Audit Service |
-| Application | **Self-Service Request Service** | Employee-submitted change requests and their HR approval workflow. | Core HR DB, Audit Service |
-| Application | **Audit Service** | Central append-only writer/reader for the HR audit trail. | Audit Log Store |
-| Application | **AI Orchestration Service** | Coordinates a generation request end-to-end: fetch approved data → hand off to AI Service Module → receive validated draft → persist as `DRAFT`. Never itself calls approval/finalize logic. | AI Service Module, Document & Template Service, Employee Profile Service |
-| AI Module | **Context Builder / Data Minimization Filter** | Applies per-task field allow-lists; strips/masks excluded fields (see `ai-architecture.md` §6). | Called by AI Orchestration Service |
-| AI Module | **Prompt Template Engine** | Renders versioned prompt templates with minimized context. | Context Builder |
-| AI Module | **Gemini Client Adapter** | Sole component with Gemini API credentials; performs the actual API call, applies retries/timeouts. | Google Gemini API |
-| AI Module | **Input/Output Validator** | Pre-call input validation; post-call schema + fact-grounding validation. | Gemini Client Adapter |
-| AI Module | **AI Request Logger** | Writes privacy-aware metadata records of each AI call to the audit store (not raw sensitive content). | Audit Log Store |
-
----
-
-## 6. API Boundaries
-
-Core HR exposes a single **versioned REST API** (`/api/core-hr/v1/...`) as the only
-sanctioned entry point into its data and functions. Internal service-to-service calls
-within Group 4 may use direct in-process calls or an internal RPC, but that is an
-implementation detail invisible to other groups.
-
-### 6.1 API surface groups
-
-| Surface | Audience | Examples |
+| Layer | Laravel construct | Responsibility |
 |---|---|---|
-| **HR Management API** | Group 4's own HR Web App | Full CRUD on employees, org structure, lifecycle events, templates, documents, profiles. Protected by RBAC per `requirements.md` §6.1. |
-| **Employee Self-Service API** | Group 4's own ESS Portal | Read own record; submit self-service change requests. Enforces "self only" row-level security. |
-| **AI Generation API** | Group 4's own HR Web App (never called directly by frontend to Gemini) | `POST /ai/employee-profile/generate`, `POST /ai/documents/generate`, review/approve endpoints. |
-| **Cross-Group Integration API** | Other MMS subsystems (Groups 1,2,3,5,6,7,8) | Read-mostly employee/org endpoints + optional domain events. Detailed contract in [`integration-contract.md`](./integration-contract.md). |
-| **Admin/Audit API** | HR Admin, System Admin | Role/permission management, audit trail query. |
+| HTTP | `routes/api.php`, route groups + middleware | Declares the versioned API surface (`/api/core-hr/v1/...`); applies `auth:sanctum` and Policy-backed authorization middleware. Full route list in `api-contract.md`. |
+| Controllers | `App\Http\Controllers\Api\*` | Thin resourceful controllers: accept a validated Form Request, delegate to a Service, return an API Resource. No business logic in controllers. |
+| Validation | `App\Http\Requests\*` (Form Requests) | All input validation lives here (`authorize()` for coarse-grained checks, `rules()` for field validation); this is the concrete mechanism behind `FR-EMP-16`. |
+| Authorization | `App\Policies\*` (Laravel Policies), Gates | Row/action-level authorization (e.g., "can this user edit this employee", "can this user approve this document") — the concrete mechanism behind RBAC (`FR-SEC-*`). |
+| Application Services | `App\Services\*` | Business logic and orchestration per module (see `requirements.md` §9); the only layer allowed to coordinate multiple Eloquent models/transactions for a single use case. |
+| AI Service Module | `App\Services\AI\*` | Gemini integration internals — detailed in `ai-architecture.md` §2. Called only by `EmployeeProfileService` and `HrDocumentService`, never directly by controllers. |
+| Eloquent Models | `App\Models\*` | Data access + relationships + casts (e.g., `EmploymentStatus` enum cast); full model list and schema in `database-design.md`. |
+| Persistence | MySQL via Laravel migrations | Reproducible schema — see `database-design.md`. |
 
-### 6.2 API boundary rules
+### 3.2 Authentication & authorization mechanics
 
-- All authoritative **writes** to employee/org/employment data happen only inside
-  Group 4's own services, triggered only by Group 4's own UI (HR Web App / ESS Portal)
-  or well-defined internal workflows (e.g., approval transitions). No external group is
-  ever granted write access to Core HR data.
-- Other groups integrate **read-only** against the Cross-Group Integration API (or
-  subscribe to domain events for change notifications) — see
-  [`integration-contract.md`](./integration-contract.md) for exact endpoints/events.
-  If another group needs to *request* a Core HR change (e.g., Payroll flags a status
-  discrepancy), that is modeled as a request/notification back to Core HR, not a direct
-  write.
-- The **AI Generation API** is only reachable by authenticated Group 4 HR users through
-  the Group 4 backend; the Gemini API itself is never reachable from any frontend, and
-  never reachable by other groups at all.
-- All API responses use consistent envelope, pagination, and error formats
-  (`ASSUMPTION`: exact envelope/error schema to be aligned with the MMS-wide API
-  standard, if one exists at the program level — not yet supplied).
+- **Authentication:** Laravel Sanctum.
+  - React SPA uses Sanctum's cookie-based SPA authentication (CSRF-protected session
+    cookies) when served from a domain covered by Sanctum's `stateful` config.
+  - Sanctum **personal access tokens** are issued for service-to-service calls from
+    other MMS groups' backends against the Cross-Group Integration API (see
+    `integration-contract.md` §2) and for any non-browser client.
+  - `ASSUMPTION`: If the client's actual environment has an existing shared
+    authentication/SSO mechanism across all 8 groups, Core HR's auth layer should be
+    adapted to it instead of introducing a second, competing auth system — flagged
+    here pending confirmation of the real base project (`project-analysis.md` §2.3
+    Assumption A0).
+- **Authorization:** Laravel Policies mapped 1:1 to Eloquent models that need
+  record-level rules (`EmployeePolicy`, `HrDocumentPolicy`, `EmployeeProfilePolicy`,
+  `DocumentTemplatePolicy`), plus named Gates for coarse-grained, non-model-specific
+  permissions (e.g., `Gate::allows('ai.profile.generate')`,
+  `Gate::allows('ai.document.approve')`). Role → permission mapping is data-driven
+  (stored in `roles`/`permissions`/`role_permission` tables, not hardcoded switch
+  statements), so it can be administered without a deployment — see
+  `database-design.md` §3.7.
+
+---
+
+## 4. Frontend Structure (React)
+
+Since no existing frontend was found, this is a proposed structure for a feature-first
+React SPA (see `project-analysis.md` §2.1/§3.3 for the "not found" finding and
+recommended defaults: React 18+, Vite, TypeScript).
+
+```mermaid
+flowchart TB
+    subgraph App["React App"]
+        Router["Router\n(role-aware route guards)"]
+        subgraph Features["Feature Modules (resources/js/features/)"]
+            F1["employees/\n(list, detail, form)"]
+            F2["org-structure/\n(departments, positions, branches)"]
+            F3["employment-lifecycle/\n(transfers, promotions, separations)"]
+            F4["employee-documents/"]
+            F5["ai-profiling/\n(generate, review, approved-view)"]
+            F6["ai-document-drafting/\n(select, generate, edit, review, approval)"]
+            F7["audit-trail/"]
+            F8["auth/\n(login, session)"]
+            F9["self-service/\n(ESS views)"]
+        end
+        subgraph Shared["Shared"]
+            API["API client\n(Axios/fetch wrapper,\nSanctum cookie or bearer token)"]
+            UI["Shared UI components\n(AIGeneratedBadge, StatusBadge, etc.)"]
+            Hooks["Hooks / state\n(TanStack Query recommended\nfor server-state caching)"]
+        end
+    end
+
+    Backend["Laravel REST API"]
+
+    Router --> Features
+    Features --> Hooks --> API --> Backend
+    Features --> UI
+```
+
+Key React-side design points:
+
+- **No Gemini calls from React, ever.** `ai-profiling/` and `ai-document-drafting/`
+  feature modules only ever call Laravel endpoints (`/api/core-hr/v1/ai/...`); the
+  Gemini API key never reaches the browser bundle, browser network tab, or any
+  client-side environment variable (`VITE_*` variables are publicly readable, so the
+  key must never be assigned to one).
+- **Explicit "AI-generated, pending review" UI treatment** on every screen that shows
+  Gemini output, satisfying `NFR-USE-01`.
+- **Role-aware routing/guards**, mirroring the backend Policies, so UI affordances
+  (e.g., an "Approve" button) are only rendered for roles that also pass the backend
+  check — the backend Policy remains the actual security boundary; the frontend guard
+  is a UX convenience, not a security control.
+- `ASSUMPTION`: Whether the React app is served from Laravel's own `resources/js`
+  (single-deployable, Sanctum SPA cookie auth) or as a fully separate SPA deployment
+  (cross-origin, Sanctum token auth) is undetermined absent a real base project;
+  `api-contract.md` §3 documents both auth modes so either can be adopted without
+  changing the API contract itself.
+
+---
+
+## 5. Module Responsibilities (Laravel mapping)
+
+| Module | Laravel Service | Key Eloquent Models | Talks to |
+|---|---|---|---|
+| Employee Management | `EmployeeService` | `Employee`, `ContactInfo`, `EmergencyContact` | MySQL, `AuditLogService` |
+| Organization Management | `OrganizationService` | `Department`, `Position`, `Branch` | MySQL, `AuditLogService` |
+| Employment Lifecycle | `EmploymentLifecycleService` | `EmploymentInfo`, `EmploymentHistory`, `EmployeeTransfer`, `EmployeePromotion`, `SeparationRecord` | MySQL, `AuditLogService`, publishes domain events |
+| Employee Documents | `EmployeeDocumentService` | `EmployeeDocument` | MySQL, Laravel filesystem/storage, `AuditLogService` |
+| Employee Profiling | `EmployeeProfileService` | `EmployeeProfile` | AI Service Module, MySQL, `AuditLogService` |
+| Document Drafting | `HrDocumentService` | `DocumentTemplate`, `HrDocument`, `DocumentDraftHistory` | AI Service Module, MySQL, `AuditLogService` |
+| Audit Logging | `AuditLogService` | `HrAuditLog` | MySQL |
+| Authentication / RBAC | Sanctum + `App\Policies\*` | `User`, `Role`, `Permission` | MySQL |
+| AI/Gemini Service (shared) | `GeminiService` + `App\Services\AI\*` | `AiRequestLog` (writes); reads other models via the calling Service, never directly | Google Gemini API (via Laravel HTTP client), `AuditLogService` |
+
+Full per-service method-level responsibilities and the AI pipeline internals are in
+[`ai-architecture.md`](./ai-architecture.md); route-level detail is in
+[`api-contract.md`](./api-contract.md).
+
+---
+
+## 6. Minimal Package List (proposed)
+
+Per the task instruction not to install unnecessary packages, this is the minimal set
+this design anticipates needing — no packages have been installed as part of this
+analysis phase.
+
+| Package | Purpose | Necessity |
+|---|---|---|
+| `laravel/sanctum` | Authentication (SPA session + API tokens) | Laravel's documented first-party choice for this exact use case; no simpler built-in alternative |
+| *(no extra HTTP client package)* | Gemini API calls | Laravel's built-in `Illuminate\Support\Facades\Http` (Guzzle under the hood, already a Laravel dependency) is sufficient — no separate Gemini SDK is required |
+| `laravel/pint` (dev only) | Code style (PSR-12) | Ships with Laravel; zero-config |
+| `laravel/pail` or built-in logging (dev only) | Local log tailing | Optional convenience, not a hard requirement |
+| React, `react-dom` | Frontend framework | Required by the brief |
+| `vite`, `@vitejs/plugin-react` | Frontend build tooling | Laravel's default modern frontend build path |
+| `axios` (or native `fetch`) | HTTP client for React → Laravel calls | `ASSUMPTION`: either is acceptable; `axios` is the more common Laravel+React pairing for interceptor-based auth header handling |
+| `@tanstack/react-query` (optional) | Server-state caching/loading states for async AI generation calls | `ASSUMPTION`: recommended, not mandated — simplifies the "long-running AI request" UX (`NFR-PERF-02`) but a hand-rolled loading-state solution is also acceptable |
+
+Explicitly **not** proposed: a dedicated Gemini PHP SDK package (unnecessary — the
+Gemini REST API is called directly via Laravel's HTTP client per `ai-architecture.md`
+§2), Laravel Passport (OAuth2 is not needed for this use case), a queue-specific
+package beyond Laravel's built-in queue system (if async job dispatch is used for AI
+generation — see `ai-architecture.md` §2.6).
 
 ---
 
@@ -372,64 +398,70 @@ implementation detail invisible to other groups.
 
 ```mermaid
 flowchart TB
-    subgraph Client_Tier["Client Tier"]
-        Browser[Employee/HR Browser Sessions]
+    subgraph Dev["Local Development (XAMPP, per task brief)"]
+        Apache["Apache (XAMPP)\nor `php artisan serve`"]
+        PHPModule["PHP 8.2/8.3 + Laravel app"]
+        MySQLDev[("MySQL (XAMPP)")]
+        ViteDev["Vite dev server\n(React HMR)"]
     end
 
-    subgraph App_Tier["Application Tier (Group 4 backend)"]
-        LB[Load Balancer / API Gateway]
-        AppSvc1[Core HR App Instance]
-        AppSvc2[Core HR App Instance]
-        AISvcNode["AI Service Module\n(same deployable or\nseparate microservice)"]
+    subgraph Prod["Indicative Production Topology"]
+        LB["Load Balancer / Reverse Proxy"]
+        AppSvc1["Laravel App (PHP-FPM + Nginx)"]
+        AppSvc2["Laravel App (PHP-FPM + Nginx)"]
+        Queue["Queue Worker(s)\n(php artisan queue:work)\nfor async AI jobs, if used"]
+        RDBMS[("MySQL 8.x")]
+        ObjectStore[("File storage\n(local disk or S3-compatible,\nvia Laravel filesystem)")]
+        SecretStore[("Environment secrets\n(.env / secret manager)\nGEMINI_API_KEY")]
+        StaticAssets["Built React assets\n(served by Nginx or Laravel)"]
     end
 
-    subgraph Data_Tier["Data Tier"]
-        RDBMS[(Relational DB\ne.g., PostgreSQL)]
-        ObjectStore[(Object/File Storage\nfor documents & attachments)]
-        AuditStore[(Audit Log Store\ne.g., append-only table\nor dedicated log store)]
-        SecretStore[(Secret Manager\nGemini API Key)]
-    end
-
-    subgraph External_Tier["External"]
-        GeminiAPI[(Google Gemini API)]
-        OtherGroupAPIs[Other Group Services]
-    end
+    Browser["Employee/HR Browser Sessions"]
+    GeminiAPI[("Google Gemini API")]
+    OtherGroupAPIs["Other Group Services"]
 
     Browser --> LB --> AppSvc1
     LB --> AppSvc2
+    LB --> StaticAssets
     AppSvc1 --> RDBMS
     AppSvc2 --> RDBMS
     AppSvc1 --> ObjectStore
-    AppSvc1 --> AuditStore
-    AppSvc1 --> AISvcNode
-    AISvcNode --> SecretStore
-    AISvcNode -->|HTTPS, key from\nSecretStore only| GeminiAPI
-    AppSvc1 <-->|versioned REST\n+ optional events| OtherGroupAPIs
+    AppSvc1 --> Queue
+    AppSvc1 --> SecretStore
+    AppSvc1 -->|HTTPS, key from .env only| GeminiAPI
+    AppSvc1 <-->|versioned REST + optional events| OtherGroupAPIs
+
+    ViteDev -.dev only, not in prod.-> Apache
 ```
 
-`ASSUMPTION`: Whether the AI Service Module is deployed as a separable microservice or
-as an in-process module of the same Core HR backend is an infrastructure decision, not
-a domain-modeling one; the logical boundary (module) is fixed regardless, so this can
-change later without affecting the design in this document set.
+`ASSUMPTION`: The task brief specifies **XAMPP for local development only**; the
+production topology above is indicative (standard Laravel deployment pattern) and is
+not dictated by the brief — actual production hosting, containerization, and CI/CD are
+outside this analysis phase and should be confirmed with the client/infra team before
+implementation.
 
 ---
 
 ## 8. Cross-Cutting Concerns
 
 ### 8.1 Security
-- RBAC enforced at the API Gateway/middleware layer on every request (see
-  `requirements.md` §4.5, §6.1).
-- Row-level scoping for ESS users (self-record only) and, if confirmed, branch/
-  department scoping for HR Manager (see `requirements.md` Assumption A2).
-- Gemini API key and any other AI-provider credentials live only in a server-side
-  secret store; the AI Service Module is the only component with runtime access to it.
-- All inter-service and external calls use TLS.
+- Sanctum-based authentication on every API route except public health checks;
+  Policy/Gate-based authorization on every state-changing action (see §3.2).
+- Form Requests validate and sanitize all incoming data before it reaches a Service
+  (`FR-EMP-16`); mass-assignment protection via Eloquent `$fillable`/`$guarded`.
+- Gemini API key lives only in `.env` → `config/services.php`; only
+  `App\Services\AI\GeminiClient` reads it at runtime. It is never returned in any API
+  response, never logged, and never present in any React build artifact.
+- All traffic (browser ↔ Laravel, Laravel ↔ Gemini, Laravel ↔ other groups) uses TLS
+  in any non-local environment.
 
 ### 8.2 Auditability
-A single **Audit Service** is the only writer to the Audit Log Store. Every mutating
+A single `AuditLogService` is the only writer to `hr_audit_logs`. Every mutating
 domain action (CRUD on employee/org/lifecycle data, template changes, document status
 transitions) and every AI action (generation request, validation outcome, human review
-decision) is emitted as a structured audit event. See §21-equivalent detail in
+decision) is emitted as a structured audit event, typically via a Laravel **Model
+Observer** (e.g., `EmployeeObserver`, `HrDocumentObserver`) or explicit service-layer
+calls for actions that aren't simple model events (e.g., approval transitions). See
 [`ai-architecture.md`](./ai-architecture.md) §7 for AI-specific redaction rules and
 [`database-design.md`](./database-design.md) §5 for the audit log schema.
 
@@ -437,27 +469,29 @@ decision) is emitted as a structured audit event. See §21-equivalent detail in
 - New document types are added by publishing a new `DocumentTemplate` (data), not by
   code changes, as long as they fit the existing template/field-merge model.
 - New AI tasks (e.g., a future "exit interview summary") plug into the same AI Service
-  Module by adding a new prompt template + allow-list entry, reusing the same
-  validation/audit/human-review pipeline.
+  Module by adding a new prompt template row + allow-list config entry, reusing the
+  same validation/audit/human-review pipeline and the same `AIProviderInterface`.
 - New consumer groups integrate against the existing Cross-Group Integration API
-  surface; contract versioning (see `integration-contract.md` §1) allows additive
-  changes without breaking existing consumers.
+  surface; Laravel API versioning (URL-prefixed `v1`, `v2`, ...) allows additive
+  changes without breaking existing consumers — see `integration-contract.md` §6.
 
 ### 8.4 Failure isolation
 - Core HR's non-AI functionality (CRUD, lifecycle workflows, ESS) has **no runtime
   dependency** on the Gemini API being available. AI features degrade independently.
-- The AI Service Module applies timeouts, retries with backoff, and (recommended) a
-  circuit breaker so repeated Gemini failures don't degrade the rest of the platform
-  (see `ai-architecture.md` §2.5).
+- `GeminiClient` applies timeouts, retry with backoff (Laravel HTTP client's built-in
+  `retry()`), and a circuit-breaker pattern (`ASSUMPTION`: implemented via a simple
+  cache-backed failure counter, no extra package required) so repeated Gemini failures
+  don't degrade the rest of the platform — see `ai-architecture.md` §2.5.
 
 ---
 
 ## 9. Document Lifecycle (Architectural View)
 
-The document lifecycle state machine is owned by the **Document & Template Service**
-and is identical regardless of whether the document was AI-drafted or manually created
-(manually-created documents simply skip the "AI generation" trigger and start directly
-in `DRAFT`, authored by a human).
+The document lifecycle state machine is owned by `HrDocumentService` and enforced via
+an `hr_documents.status` enum column plus a Laravel **Policy** that authorizes each
+transition. It is identical regardless of whether the document was AI-drafted or
+manually created (manually-created documents simply skip the AI generation trigger and
+start directly in `draft`, authored by a human).
 
 ```mermaid
 stateDiagram-v2
@@ -474,7 +508,8 @@ stateDiagram-v2
 
 Full field-level detail (who can trigger each transition, what gets logged, what data
 is required) is in [`ai-architecture.md`](./ai-architecture.md) §4.3 and
-[`database-design.md`](./database-design.md) entity `HRDocument`.
+[`database-design.md`](./database-design.md) entity `hr_documents`; the concrete
+Laravel endpoints for each transition are in [`api-contract.md`](./api-contract.md) §7.
 
 ---
 
@@ -497,5 +532,7 @@ integrates with Core HR:
 ---
 
 *End of `architecture.md`. See [`ai-architecture.md`](./ai-architecture.md) for AI
-subsystem internals and [`integration-contract.md`](./integration-contract.md) for
-concrete API/event contracts.*
+subsystem internals, [`database-design.md`](./database-design.md) for the migration
+plan, [`api-contract.md`](./api-contract.md) for the concrete route table, and
+[`integration-contract.md`](./integration-contract.md) for cross-group API/event
+contracts.*

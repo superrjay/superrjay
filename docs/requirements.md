@@ -13,14 +13,37 @@ Model Technology.
 implementation.
 
 **Related documents:**
+[`project-analysis.md`](./project-analysis.md) ·
 [`architecture.md`](./architecture.md) ·
 [`ai-architecture.md`](./ai-architecture.md) ·
 [`database-design.md`](./database-design.md) ·
+[`api-contract.md`](./api-contract.md) ·
 [`integration-contract.md`](./integration-contract.md)
 
 ---
 
 ## 1. System Scope
+
+### 1.1 Technology Stack
+
+Per the project brief, Group 4 is implemented on a fixed technology stack (see
+[`project-analysis.md`](./project-analysis.md) for the inspection confirming no
+existing codebase constrains these choices):
+
+| Layer | Technology |
+|---|---|
+| Backend | Laravel (PHP), exposing a RESTful JSON API |
+| Frontend | React (JavaScript/TypeScript SPA) |
+| Database | MySQL, managed exclusively through Laravel migrations/Eloquent (local dev via XAMPP) |
+| AI provider | Google Gemini API, called only from the Laravel backend — never from React |
+
+All functional and non-functional requirements below are written to be implementable
+on this stack; where a requirement implies a specific Laravel/React mechanism (e.g.,
+Form Requests, Sanctum, Eloquent), that is called out explicitly. Full technical
+architecture is in [`architecture.md`](./architecture.md); the Gemini integration
+design is in [`ai-architecture.md`](./ai-architecture.md); the schema/migration plan
+is in [`database-design.md`](./database-design.md); the concrete route list is in
+[`api-contract.md`](./api-contract.md).
 
 The Microfinancial Management System (MMS) is decomposed into eight subsystem groups,
 each owned by a different development team:
@@ -159,13 +182,14 @@ IDs use the prefix `FR-<area>-<n>` for traceability into design and test artifac
 | FR-EMP-13 | The system shall allow an employee to submit changes to their own contact information and emergency contacts; changes shall require HR approval before becoming part of the authoritative record `(ASSUMPTION: approval-required workflow; direct self-edit without review is not assumed by default)`. |
 | FR-EMP-14 | The system shall prevent employees from directly viewing or editing other employees' records via ESS. |
 | FR-EMP-15 | The system shall expose Core HR employee/org data to other MMS subsystems only through defined, versioned integration APIs/events (see `integration-contract.md`), never via direct database access. |
+| FR-EMP-16 | All incoming write requests (create/update employee, org, lifecycle, document data) shall be validated using Laravel Form Requests before reaching business logic; invalid requests shall return standard Laravel validation error responses (422 with field-level messages). |
 
 ### 4.2 AI-Assisted Employee Profiling (FR-PROF)
 
 | ID | Requirement |
 |---|---|
 | FR-PROF-01 | The system shall allow an authorized HR user to request AI-assisted profile generation for a specific employee. |
-| FR-PROF-02 | The system shall build the AI context solely from structured, approved employee data existing in the Core HR database at the time of generation (see §7.1 for allowed fields). |
+| FR-PROF-02 | The system shall build the AI context solely from structured, approved employee data existing in the Core HR database at the time of generation (see §13 and `ai-architecture.md` §6.2 for the allowed field list). |
 | FR-PROF-03 | The generated profile shall include, where data supports it: professional summary, employment history summary, role & responsibility summary, skills & competencies summary, training & development summary, career history summary. |
 | FR-PROF-04 | The system shall visually and structurally separate "Source Data" (verbatim/derived facts from the database) from "AI-Generated Narrative" (Gemini-produced prose) in the profile UI and stored artifact. |
 | FR-PROF-05 | The system shall not allow an AI-generated profile to be saved as an official HR record without explicit review and approval by an authorized HR user. |
@@ -194,13 +218,13 @@ IDs use the prefix `FR-<area>-<n>` for traceability into design and test artifac
 
 | ID | Requirement |
 |---|---|
-| FR-AI-01 | All Gemini API calls shall originate from a dedicated backend AI service; the API key/credentials shall never be exposed to any frontend client. |
-| FR-AI-02 | The AI service shall apply a data-minimization filter to strip or mask fields not required for the requested AI task before constructing any prompt (see §7). |
+| FR-AI-01 | All Gemini API calls shall originate from a dedicated Laravel backend service class (see `ai-architecture.md` §2); the API key/credentials shall be stored only in the Laravel `.env` file / `config/services.php` and shall never be exposed to the React frontend or any client-side code. |
+| FR-AI-02 | The AI service shall apply a data-minimization filter to strip or mask fields not required for the requested AI task before constructing any prompt (see §13 and `ai-architecture.md` §6). |
 | FR-AI-03 | The AI service shall validate inputs (e.g., required fields present, employee status eligible) before calling Gemini. |
 | FR-AI-04 | The AI service shall validate outputs (e.g., structure/schema conformance, fact-grounding heuristics, length limits, prohibited content checks) before returning results to the requesting UI. |
 | FR-AI-05 | The AI service shall manage token/context budgets, truncating or summarizing input context as needed while preserving required factual fields. |
 | FR-AI-06 | The AI service shall implement retry with backoff for transient Gemini API failures and shall surface a clear error state to the user on exhaustion of retries. |
-| FR-AI-07 | The AI service shall log every AI request/response at a metadata level (see §21 of the parent task / `ai-architecture.md` §7) without persisting raw sensitive employee data in logs. |
+| FR-AI-07 | The AI service shall log every AI request/response at a metadata level (see `ai-architecture.md` §7) without persisting raw sensitive employee data in logs. |
 | FR-AI-08 | The AI service shall tag every stored AI request with a prompt-template identifier and version, and the Gemini model identifier/version used. |
 | FR-AI-09 | No AI-generated content shall be marked "official" or usable downstream until an authorized human reviewer has explicitly approved it. |
 
@@ -209,10 +233,11 @@ IDs use the prefix `FR-<area>-<n>` for traceability into design and test artifac
 | ID | Requirement |
 |---|---|
 | FR-SEC-01 | The system shall implement role-based access control (RBAC) with, at minimum, the roles: HR Administrator, HR Manager, HR Staff, System Administrator, and Employee (self-service) `(ASSUMPTION: "Employee" role added to satisfy ESS requirement; client to confirm exact role list/naming)`. |
-| FR-SEC-02 | The system shall restrict record-level access to Employee Self-Service users to their own record only. |
+| FR-SEC-02 | The system shall restrict record-level access to Employee Self-Service users to their own record only, enforced via Laravel Policies/Gates on every relevant controller action. |
 | FR-SEC-03 | The system shall enforce that only roles with document-approval permission may transition a document from `FOR_REVIEW` to `APPROVED`, and only roles with finalization permission may transition `APPROVED` to `FINALIZED`. |
 | FR-SEC-04 | The system shall enforce that AI generation actions (profiling, drafting) are only available to roles explicitly granted the corresponding permission. |
 | FR-SEC-05 | The system shall log all permission-denied attempts on sensitive actions for security review. |
+| FR-SEC-06 | The system shall authenticate users via Laravel Sanctum (SPA session auth for the React frontend; personal access tokens for service-to-service calls from other MMS groups). |
 
 ### 4.6 Auditability (FR-AUD)
 
@@ -230,7 +255,7 @@ IDs use the prefix `FR-<area>-<n>` for traceability into design and test artifac
 
 | Category | ID | Requirement |
 |---|---|---|
-| **Security** | NFR-SEC-01 | Gemini API credentials shall be stored in a server-side secret store (e.g., environment/secret manager), never in client code, source control, or logs. |
+| **Security** | NFR-SEC-01 | Gemini API credentials shall be stored in the Laravel `.env` file (read via `config/services.php`), never committed to source control (`.env` remains git-ignored), never in client code, and never logged. |
 | **Security** | NFR-SEC-02 | All API traffic shall use TLS in transit; data at rest for PII fields shall be encrypted per platform standard `(ASSUMPTION: exact encryption standard, e.g., AES-256 at column level vs. disk-level, to be confirmed with infra/security team)`. |
 | **Security** | NFR-SEC-03 | Authentication/session tokens shall never be included in any AI prompt context. |
 | **Privacy** | NFR-PRIV-01 | The system shall apply data minimization: only fields explicitly whitelisted per AI task (see `ai-architecture.md` §6) are eligible to be sent to Gemini. |
@@ -240,11 +265,12 @@ IDs use the prefix `FR-<area>-<n>` for traceability into design and test artifac
 | **Performance** | NFR-PERF-01 | Non-AI Core HR CRUD operations shall respond within typical interactive thresholds (`ASSUMPTION`: target P95 < 500 ms server-side, pending infra sizing). |
 | **Performance** | NFR-PERF-02 | AI generation requests are long-running relative to CRUD; the UI shall treat them asynchronously (loading/progress state, ability to cancel) rather than assume sub-second response. |
 | **Auditability** | NFR-AUD-01 | Audit logs shall be retained for a minimum period aligned with HR/legal record retention policy `(ASSUMPTION: retention period, e.g., 7 years, pending client/legal confirmation)`. |
-| **Maintainability** | NFR-MAINT-01 | The AI provider integration shall be abstracted behind an internal interface so the Gemini SDK/API can be replaced or versioned with minimal impact on calling code. |
-| **Maintainability** | NFR-MAINT-02 | Prompt templates shall be stored as versioned, editable configuration/data (not hardcoded strings) so non-engineering HR/compliance stakeholders can review wording changes. |
-| **Usability** | NFR-USE-01 | AI-generated content shall be visually distinguished (e.g., badge/label "AI-generated — pending review") anywhere it appears in the UI. |
+| **Maintainability** | NFR-MAINT-01 | The AI provider integration shall be abstracted behind an internal PHP interface/contract (e.g., an `AIProvider` interface bound in the Laravel service container) so the Gemini SDK/API can be replaced or versioned with minimal impact on calling code. |
+| **Maintainability** | NFR-MAINT-02 | Prompt templates shall be stored as versioned, editable database records (Eloquent-managed) rather than hardcoded PHP strings, so non-engineering HR/compliance stakeholders can review wording changes without a code deployment. |
+| **Usability** | NFR-USE-01 | AI-generated content shall be visually distinguished (e.g., badge/label "AI-generated — pending review") anywhere it appears in the React UI. |
 | **Compliance** | NFR-COMP-01 | The system's handling of personal data shall be designed to be compatible with the Philippine Data Privacy Act of 2012 (RA 10173) principles of transparency, legitimate purpose, and proportionality `(ASSUMPTION: jurisdiction inferred from "Microfinancial" + document artifacts; to be confirmed with client/legal)`. |
-| **Portability** | NFR-PORT-01 | The Core HR service shall expose its integration APIs in a technology-agnostic format (REST/JSON, versioned) so other groups can integrate regardless of their internal stack. |
+| **Portability** | NFR-PORT-01 | The Core HR service shall expose its integration APIs as a versioned Laravel REST API (JSON, `/api/core-hr/v1/...`) so other groups can integrate regardless of their internal stack. See `api-contract.md`. |
+| **Reproducibility** | NFR-REPR-01 | The entire database schema shall be reproducible from source control via `php artisan migrate` (migrations) and `php artisan db:seed` (seeders/factories) alone; no schema object shall be created only through phpMyAdmin or manual SQL. |
 
 ---
 
@@ -422,19 +448,26 @@ Detailed AI workflows (including data-minimization and validation steps) are in
 
 ## 9. Core HR Modules
 
-| Module | Responsibility |
-|---|---|
-| **Employee Master Data Module** | Personal info, contact info, emergency contacts, employee identity. |
-| **Employment & Organization Module** | Employment info/status, department, position, branch/location, org structure, reporting lines. |
-| **Employment Lifecycle Module** | Employment history ledger, transfers, promotions, resignation/termination records and approvals. |
-| **Employee Documents Module** | Upload/storage metadata for non-AI supporting documents (IDs, signed contracts, certificates). |
-| **Employee Self-Service Module** | Employee-facing read views + self-service update request submission. |
-| **AI Employee Profiling Module** | Orchestrates profile generation requests, review, versioning. |
-| **HR Document Drafting Module** | Document templates, draft generation orchestration, lifecycle state machine, draft history. |
-| **AI Service (shared, see `ai-architecture.md`)** | Gemini integration, prompt templates, context prep, validation, logging — shared by both AI modules. |
-| **RBAC / User Roles Module** | Role and permission definitions and enforcement for Core HR resources. |
-| **HR Audit Trail Module** | Central append-only audit log for all Core HR and AI-assisted actions. |
-| **Integration/API Gateway Module** | Exposes versioned APIs/events for other groups to consume Core HR data (read-mostly). |
+Each module below maps to a corresponding Laravel service class + Eloquent model set
+(see `architecture.md` §5 and `database-design.md`), and to one of the 21 Core HR
+capability items enumerated in the project brief.
+
+| Module | Responsibility | Brief item(s) |
+|---|---|---|
+| **Employee Management** | Employee identity, personal info, contact info, emergency contacts. | 1–4 |
+| **Employment Information / Status** | Current employment info, employment status. | 5–6 |
+| **Department Management** | Department CRUD, hierarchy. | 7 |
+| **Position Management** | Position/grade CRUD. | 8 |
+| **Branch/Location Management** | Branch/location CRUD. | 9 |
+| **Organizational Structure** | Reporting lines, department/position/branch composition views. | 10 |
+| **Employment Lifecycle** | Employment history ledger, transfers, promotions, resignation/termination records and approvals. | 11, 13, 14, 15 |
+| **Employee Documents** | Upload/storage metadata for non-AI supporting documents (IDs, signed contracts, certificates). | 12 |
+| **Employee Profiling (AI Feature 1)** | Orchestrates AI profile generation requests, review, versioning. | 16 |
+| **Document Drafting (AI Feature 2)** | Document templates, draft generation orchestration, lifecycle state machine, draft history. | 17–19 |
+| **AI/Gemini Service (shared, see `ai-architecture.md`)** | Gemini integration, prompt templates, context prep, validation, logging — shared by both AI modules. | 17 |
+| **Audit Trail** | Central append-only audit log for all Core HR and AI-assisted actions. | 20 |
+| **Authentication / RBAC** | Laravel Sanctum authentication; role and permission definitions and enforcement for Core HR resources. | 21 |
+| **Integration/API Gateway** | Exposes versioned Laravel REST endpoints/events for other groups to consume Core HR data (read-mostly). | — |
 
 ---
 
@@ -453,11 +486,11 @@ Full detail in [`ai-architecture.md`](./ai-architecture.md) §5. Summary princip
 1. **Grounding only** — Gemini is only given structured facts already approved in the
    Core HR database; it is instructed (via system prompt) to compose narrative language
    only, not invent facts, dates, names, or qualifications.
-2. **No autonomous writes** — AI output never writes directly to `Employee`,
-   `EmploymentHistory`, or any authoritative table. It only ever produces a `DRAFT`
-   `EmployeeProfile` or `HRDocument` row awaiting human review.
-3. **No autonomous approval/transmission** — status transitions past `DRAFT`/
-   `FOR_REVIEW` require an explicit human action by a permitted role; the AI service has
+2. **No autonomous writes** — AI output never writes directly to the `employees`,
+   `employment_histories`, or any authoritative table. It only ever produces a `draft`
+   `employee_profiles` or `hr_documents` row awaiting human review.
+3. **No autonomous approval/transmission** — status transitions past `draft`/
+   `for_review` require an explicit human action by a permitted role; the AI service has
    no permission/capability to call approval or finalize/send endpoints.
 4. **Input and output validation** — schema validation, field allow-listing, and a
    post-generation fact-check pass (cross-referencing named entities/dates/numbers in
@@ -481,8 +514,8 @@ Full detail in [`ai-architecture.md`](./ai-architecture.md) §6. Summary princip
   storage; the frontend never sees it and never calls Gemini directly.
 - **Minimal retention of AI payloads**: raw prompts/responses containing personal data
   are not persisted long-term; only redacted metadata + a reference to the resulting
-  structured record are kept in the audit trail (see §21 in `architecture.md` / §7 in
-  `ai-architecture.md`).
+  structured record are kept in the audit trail (see `architecture.md` §8.2
+  Auditability and `ai-architecture.md` §7).
 
 ---
 
@@ -504,7 +537,7 @@ They are also inlined above where relevant, tagged `ASSUMPTION`.
    from client HR/legal stakeholders and is not to be finalized by engineering or by AI
    alone.
 5. **A5 — E-signature**: Digital/e-signature integration is assumed out of scope for
-   this phase; `FINALIZED` documents are exported (e.g., PDF) for an existing/external
+   this phase; `finalized` documents are exported (e.g., PDF) for an existing/external
    signing process.
 6. **A6 — Record retention period**: Exact audit/document retention duration is assumed
    to follow standard HR recordkeeping practice but the specific number of years is not
@@ -521,6 +554,13 @@ They are also inlined above where relevant, tagged `ASSUMPTION`.
 10. **A10 — Language**: Generated documents/profiles are assumed to be in English by
     default; multi-language support (e.g., Filipino) is not yet confirmed as a
     requirement.
+11. **A11 — No existing base project** (see `project-analysis.md` §2.3, Assumption
+    A0): No existing Laravel/React codebase was found for Group 4 to extend; this
+    entire document set describes a green-field design against the task brief's fixed
+    stack (Laravel, React, MySQL, Gemini). If a real base project exists elsewhere
+    (e.g., a shared monorepo with other groups' modules already scaffolded), this
+    analysis should be redone against it and any conflicting recommendation here
+    resolved in favor of the real project's existing conventions.
 
 ---
 
@@ -528,7 +568,7 @@ They are also inlined above where relevant, tagged `ASSUMPTION`.
 
 | Risk / Limitation | Impact | Mitigation |
 |---|---|---|
-| **LLM hallucination** — Gemini may still produce plausible-sounding but incorrect narrative text despite grounding instructions. | Incorrect facts could appear in official HR documents/profiles if reviewers are inattentive. | Mandatory human review gate before any status beyond `DRAFT`/generated profile; automated output fact-grounding checks flagging ungrounded entities; UI clearly labels AI content as "pending review." |
+| **LLM hallucination** — Gemini may still produce plausible-sounding but incorrect narrative text despite grounding instructions. | Incorrect facts could appear in official HR documents/profiles if reviewers are inattentive. | Mandatory human review gate before any status beyond `draft`/generated profile; automated output fact-grounding checks flagging ungrounded entities; UI clearly labels AI content as "pending review." |
 | **Sensitive data leakage to third-party API** — Any data sent to Gemini leaves the organization's infrastructure boundary. | Privacy/compliance exposure even with minimization. | Strict field allow-listing per task, exclusion of IDs/financial data, contractual data-handling terms with the AI provider `(ASSUMPTION: exact Gemini API data-retention terms need legal review — Google's API terms should be checked against organizational policy)`. |
 | **Prompt injection via stored employee data** — a free-text field (e.g., notes) could contain text designed to manipulate the AI's output. | Could produce unexpected/inappropriate AI output. | Only well-defined structured fields are interpolated into prompts; free-text fields are excluded or sanitized/escaped; system prompt constrains output format. |
 | **Availability dependency on external API** — Gemini outages/rate limits affect AI features. | AI features degraded/unavailable. | Retry/backoff, circuit breaker, graceful degradation (manual document creation always available as fallback). |
@@ -537,8 +577,11 @@ They are also inlined above where relevant, tagged `ASSUMPTION`.
 | **Ambiguous organizational rules** — approval scoping, retention periods, and document legal wording are undefined (see §22 assumptions). | Risk of building the wrong workflow. | All such items explicitly flagged as assumptions requiring client confirmation before implementation; design remains configurable rather than hardcoded where possible. |
 | **AI over-reliance by HR staff** — reviewers may rubber-stamp AI drafts without genuine review. | Defeats the purpose of the human-in-the-loop control. | UI/process design should require an explicit, deliberate approval action (not one-click blind accept), and audit trail records who approved what and when, enabling post-hoc quality audits. |
 | **Regulatory classification of sensitive personal information** — some HR data (e.g., civil status, health-related leave reasons) may be classified as "sensitive personal information" under RA 10173, requiring stricter handling. | Legal exposure if mishandled. | Explicit field classification (see `ai-architecture.md` §6.1) and exclusion of sensitive-personal-information categories from AI context by default. |
+| **No existing base project to build against** — inspection found no Laravel/React codebase in this repository (`project-analysis.md`). | Risk that a real base project exists elsewhere with different versions/conventions, making some of this design's defaults (Laravel version, auth package, deployment topology) incorrect once reconciled. | All version/tooling choices explicitly marked `ASSUMPTION`; domain design (migrations, models, services) is written to be independent of that reconciliation — see `project-analysis.md` §4. |
 
 ---
 
-*End of `requirements.md`. See companion documents for architecture, AI design, data
-model, and integration contracts.*
+*End of `requirements.md`. See [`project-analysis.md`](./project-analysis.md) for the
+existing-project inspection this design is grounded on, and the remaining companion
+documents for architecture, AI design, data model, API contract, and integration
+contracts.*
